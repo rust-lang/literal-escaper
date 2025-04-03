@@ -2,3 +2,6 @@
 name = "literal-escaper"
 version = "0.0.1"
 edition = "2021"
+description = "Provides code to unescape string literals"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/rust-lang/literal-escaper"
