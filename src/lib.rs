@@ -134,7 +134,11 @@ impl From<char> for MixedUnit {
 
 impl From<u8> for MixedUnit {
     fn from(n: u8) -> Self {
-        if n.is_ascii() { MixedUnit::Char(n as char) } else { MixedUnit::HighByte(n) }
+        if n.is_ascii() {
+            MixedUnit::Char(n as char)
+        } else {
+            MixedUnit::HighByte(n)
+        }
     }
 }
 
@@ -280,7 +284,9 @@ fn scan_unicode(chars: &mut Chars<'_>, allow_unicode_escapes: bool) -> Result<ch
     let mut value: u32 = match chars.next().ok_or(EscapeError::UnclosedUnicodeEscape)? {
         '_' => return Err(EscapeError::LeadingUnderscoreUnicodeEscape),
         '}' => return Err(EscapeError::EmptyUnicodeEscape),
-        c => c.to_digit(16).ok_or(EscapeError::InvalidCharInUnicodeEscape)?,
+        c => c
+            .to_digit(16)
+            .ok_or(EscapeError::InvalidCharInUnicodeEscape)?,
     };
 
     // First character is valid, now parse the rest of the number
@@ -309,7 +315,9 @@ fn scan_unicode(chars: &mut Chars<'_>, allow_unicode_escapes: bool) -> Result<ch
                 });
             }
             Some(c) => {
-                let digit: u32 = c.to_digit(16).ok_or(EscapeError::InvalidCharInUnicodeEscape)?;
+                let digit: u32 = c
+                    .to_digit(16)
+                    .ok_or(EscapeError::InvalidCharInUnicodeEscape)?;
                 n_digits += 1;
                 if n_digits > 6 {
                     // Stop updating value since we're sure that it's incorrect already.
@@ -323,7 +331,11 @@ fn scan_unicode(chars: &mut Chars<'_>, allow_unicode_escapes: bool) -> Result<ch
 
 #[inline]
 fn ascii_check(c: char, allow_unicode_chars: bool) -> Result<char, EscapeError> {
-    if allow_unicode_chars || c.is_ascii() { Ok(c) } else { Err(EscapeError::NonAsciiCharInByte) }
+    if allow_unicode_chars || c.is_ascii() {
+        Ok(c)
+    } else {
+        Err(EscapeError::NonAsciiCharInByte)
+    }
 }
 
 fn unescape_char_or_byte(chars: &mut Chars<'_>, mode: Mode) -> Result<char, EscapeError> {
