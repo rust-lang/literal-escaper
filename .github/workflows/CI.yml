@@ -1,0 +1,24 @@
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+name: CI
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+      - run: cargo fmt -- --check
+      - run: cargo test
+      - run: cargo clippy
