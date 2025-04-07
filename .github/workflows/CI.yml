@@ -22,3 +22,5 @@ jobs:
       - run: cargo fmt -- --check
       - run: cargo test
       - run: cargo clippy
+      # Ensure that no untracked or tracked files have been added or modified.
+      - run: git diff --check --exit-code
