@@ -134,71 +134,75 @@ pub fn unescape_for_errors(
     }
 }
 
+/// Takes the contents of a raw string literal (without quotes)
+/// and produces a sequence of characters or errors,
+/// which are returned by invoking `callback`.
+/// NOTE: Does no escaping, but produces errors for bare carriage return ('\r').
 pub fn check_raw_str(src: &str, mut callback: impl FnMut(Range<usize>, Result<char, EscapeError>)) {
-    unescape_unicode(src, Mode::RawStr, &mut callback)
+    check_raw_common(src, Mode::RawStr, &mut callback)
 }
 
+/// Takes the contents of a raw byte string literal (without quotes)
+/// and produces a sequence of bytes or errors,
+/// which are returned by invoking `callback`.
+/// NOTE: Does no escaping, but produces errors for bare carriage return ('\r').
 pub fn check_raw_byte_str(
     src: &str,
     mut callback: impl FnMut(Range<usize>, Result<u8, EscapeError>),
 ) {
-    unescape_unicode(src, Mode::RawByteStr, &mut |r, res| {
+    check_raw_common(src, Mode::RawByteStr, &mut |r, res| {
         callback(r, res.map(byte_from_char))
     })
 }
 
+/// Takes the contents of a raw C string literal (without quotes)
+/// and produces a sequence of characters or errors,
+/// which are returned by invoking `callback`.
+/// NOTE: Does no escaping, but produces errors for bare carriage return ('\r').
 pub fn check_raw_c_str(
     src: &str,
     mut callback: impl FnMut(Range<usize>, Result<char, EscapeError>),
 ) {
-    unescape_unicode(src, Mode::RawCStr, &mut callback)
+    check_raw_common(src, Mode::RawCStr, &mut |r, mut result| {
+        if let Ok('\0') = result {
+            result = Err(EscapeError::NulInCStr);
+        }
+        callback(r, result)
+    })
 }
 
+/// Takes the contents of a string literal (without quotes)
+/// and produces a sequence of escaped characters or errors,
+/// which are returned by invoking `callback`.
 pub fn unescape_str(src: &str, mut callback: impl FnMut(Range<usize>, Result<char, EscapeError>)) {
-    unescape_unicode(src, Mode::Str, &mut callback)
+    unescape_non_raw_common(src, Mode::Str, &mut callback)
 }
 
+/// Takes the contents of a byte string literal (without quotes)
+/// and produces a sequence of escaped bytes or errors,
+/// which are returned by invoking `callback`.
 pub fn unescape_byte_str(
     src: &str,
     mut callback: impl FnMut(Range<usize>, Result<u8, EscapeError>),
 ) {
-    unescape_unicode(src, Mode::ByteStr, &mut |r, res| {
+    unescape_non_raw_common(src, Mode::ByteStr, &mut |r, res| {
         callback(r, res.map(byte_from_char))
     })
 }
 
+/// Takes the contents of a C string literal (without quotes)
+/// and produces a sequence of escaped MixedUnits or errors,
+/// which are returned by invoking `callback`.
 pub fn unescape_c_str(
     src: &str,
     mut callback: impl FnMut(Range<usize>, Result<MixedUnit, EscapeError>),
 ) {
-    unescape_mixed(src, Mode::CStr, &mut callback)
-}
-
-/// Takes the contents of a unicode-only (non-mixed-utf8) literal (without
-/// quotes) and produces a sequence of escaped characters or errors.
-///
-/// Values are returned by invoking `callback`. For `Char` and `Byte` modes,
-/// the callback will be called exactly once.
-fn unescape_unicode<F>(src: &str, mode: Mode, callback: &mut F)
-where
-    F: FnMut(Range<usize>, Result<char, EscapeError>),
-{
-    match mode {
-        Char | Byte => {
-            let mut chars = src.chars();
-            let res = unescape_char_or_byte(&mut chars, mode);
-            callback(0..(src.len() - chars.as_str().len()), res);
+    unescape_non_raw_common(src, Mode::CStr, &mut |r, mut result| {
+        if let Ok(MixedUnit::Char('\0')) = result {
+            result = Err(EscapeError::NulInCStr);
         }
-        Str | ByteStr => unescape_non_raw_common(src, mode, callback),
-        RawStr | RawByteStr => check_raw_common(src, mode, callback),
-        RawCStr => check_raw_common(src, mode, &mut |r, mut result| {
-            if let Ok('\0') = result {
-                result = Err(EscapeError::NulInCStr);
-            }
-            callback(r, result)
-        }),
-        CStr => unreachable!(),
-    }
+        callback(r, result)
+    })
 }
 
 /// Used for mixed utf8 string literals, i.e. those that allow both unicode
@@ -234,25 +238,6 @@ impl From<u8> for MixedUnit {
         } else {
             MixedUnit::HighByte(n)
         }
-    }
-}
-
-/// Takes the contents of a mixed-utf8 literal (without quotes) and produces
-/// a sequence of escaped characters or errors.
-///
-/// Values are returned by invoking `callback`.
-fn unescape_mixed<F>(src: &str, mode: Mode, callback: &mut F)
-where
-    F: FnMut(Range<usize>, Result<MixedUnit, EscapeError>),
-{
-    match mode {
-        CStr => unescape_non_raw_common(src, mode, &mut |r, mut result| {
-            if let Ok(MixedUnit::Char('\0')) = result {
-                result = Err(EscapeError::NulInCStr);
-            }
-            callback(r, result)
-        }),
-        Char | Byte | Str | RawStr | ByteStr | RawByteStr | RawCStr => unreachable!(),
     }
 }
 
