@@ -3,7 +3,9 @@
 extern crate test;
 
 use rustc_literal_escaper::*;
+use std::fmt::Debug;
 use std::iter::repeat_n;
+use std::ops::Range;
 
 const LEN: usize = 10_000;
 
@@ -23,9 +25,7 @@ fn bench_skip_ascii_whitespace(b: &mut test::Bencher) {
         // skip_ascii_whitespace(&mut input.chars(), 0, &mut |range, res| {
         //     output.push((range, res))
         // });
-        unescape_unicode(&input, Mode::Str, &mut |range, res| {
-            output.push((range, res))
-        });
+        unescape_str(&input, |range, res| output.push((range, res)));
         assert_eq!(
             output,
             [((0..LEN + 2), Err(EscapeError::MultipleSkippedLinesWarning))]
@@ -37,14 +37,21 @@ fn bench_skip_ascii_whitespace(b: &mut test::Bencher) {
 // Check raw
 //
 
-fn bench_check_raw(b: &mut test::Bencher, c: char, mode: Mode) {
-    let input: String = test::black_box(repeat_n(c, LEN).collect());
-    assert_eq!(input.len(), LEN * c.len_utf8());
+#[allow(clippy::type_complexity)]
+fn bench_check_raw<UNIT: Into<char> + PartialEq + Debug + Copy>(
+    b: &mut test::Bencher,
+    c: UNIT,
+    check_raw: fn(&str, &mut dyn FnMut(Range<usize>, Result<UNIT, EscapeError>)),
+) {
+    let input: String = test::black_box(repeat_n(c.into(), LEN).collect());
+    assert_eq!(input.len(), LEN * c.into().len_utf8());
+
     b.iter(|| {
         let mut output = vec![];
-        unescape_unicode(&input, mode, &mut |range, res| output.push((range, res)));
+
+        check_raw(&input, &mut |range, res| output.push((range, res)));
         assert_eq!(output.len(), LEN);
-        assert_eq!(output[0], ((0..c.len_utf8()), Ok(c)));
+        assert_eq!(output[0], (0..c.into().len_utf8(), Ok(c)));
     });
 }
 
@@ -52,43 +59,49 @@ fn bench_check_raw(b: &mut test::Bencher, c: char, mode: Mode) {
 
 #[bench]
 fn bench_check_raw_str_ascii(b: &mut test::Bencher) {
-    bench_check_raw(b, 'a', Mode::RawStr);
+    bench_check_raw(b, 'a', |s, cb| check_raw_str(s, cb));
 }
 
 #[bench]
 fn bench_check_raw_str_unicode(b: &mut test::Bencher) {
-    bench_check_raw(b, '🦀', Mode::RawStr);
+    bench_check_raw(b, '🦀', |s, cb| check_raw_str(s, cb));
 }
 
 // raw byte str
 
 #[bench]
 fn bench_check_raw_byte_str(b: &mut test::Bencher) {
-    bench_check_raw(b, 'a', Mode::RawByteStr);
+    bench_check_raw(b, b'a', |s, cb| check_raw_byte_str(s, cb));
 }
 
 // raw C str
 
 #[bench]
 fn bench_check_raw_c_str_ascii(b: &mut test::Bencher) {
-    bench_check_raw(b, 'a', Mode::RawCStr);
+    bench_check_raw(b, 'a', |s, cb| check_raw_c_str(s, cb));
 }
 
 #[bench]
 fn bench_check_raw_c_str_unicode(b: &mut test::Bencher) {
-    bench_check_raw(b, '🦀', Mode::RawCStr);
+    bench_check_raw(b, '🦀', |s, cb| check_raw_c_str(s, cb));
 }
 
 //
 // Unescape
 //
 
-fn bench_unescape(b: &mut test::Bencher, s: &str, mode: Mode, expected: char) {
+#[allow(clippy::type_complexity)]
+fn bench_unescape<UNIT: Into<char> + PartialEq + Debug + Copy>(
+    b: &mut test::Bencher,
+    s: &str,
+    expected: UNIT,
+    unescape: fn(&str, &mut dyn FnMut(Range<usize>, Result<UNIT, EscapeError>)),
+) {
     let input: String = test::black_box(repeat_n(s, LEN).collect());
     assert_eq!(input.len(), LEN * s.len());
     b.iter(|| {
         let mut output = vec![];
-        unescape_unicode(&input, mode, &mut |range, res| output.push((range, res)));
+        unescape(&input, &mut |range, res| output.push((range, res)));
         assert_eq!(output.len(), LEN);
         assert_eq!(output[0], ((0..s.len()), Ok(expected)));
     });
@@ -98,39 +111,39 @@ fn bench_unescape(b: &mut test::Bencher, s: &str, mode: Mode, expected: char) {
 
 #[bench]
 fn bench_unescape_str_trivial(b: &mut test::Bencher) {
-    bench_unescape(b, r"a", Mode::Str, 'a');
+    bench_unescape(b, r"a", 'a', |s, cb| unescape_str(s, cb));
 }
 
 #[bench]
 fn bench_unescape_str_ascii(b: &mut test::Bencher) {
-    bench_unescape(b, r"\n", Mode::Str, '\n');
+    bench_unescape(b, r"\n", '\n', |s, cb| unescape_str(s, cb));
 }
 
 #[bench]
 fn bench_unescape_str_hex(b: &mut test::Bencher) {
-    bench_unescape(b, r"\x22", Mode::Str, '"');
+    bench_unescape(b, r"\x22", '"', |s, cb| unescape_str(s, cb));
 }
 
 #[bench]
 fn bench_unescape_str_unicode(b: &mut test::Bencher) {
-    bench_unescape(b, r"\u{1f980}", Mode::Str, '🦀');
+    bench_unescape(b, r"\u{1f980}", '🦀', |s, cb| unescape_str(s, cb));
 }
 
 // byte str
 
 #[bench]
 fn bench_unescape_byte_str_trivial(b: &mut test::Bencher) {
-    bench_unescape(b, r"a", Mode::ByteStr, 'a');
+    bench_unescape(b, r"a", b'a', |s, cb| unescape_byte_str(s, cb));
 }
 
 #[bench]
 fn bench_unescape_byte_str_ascii(b: &mut test::Bencher) {
-    bench_unescape(b, r"\n", Mode::ByteStr, b'\n' as char);
+    bench_unescape(b, r"\n", b'\n', |s, cb| unescape_byte_str(s, cb));
 }
 
 #[bench]
 fn bench_unescape_byte_str_hex(b: &mut test::Bencher) {
-    bench_unescape(b, r"\xff", Mode::ByteStr, b'\xff' as char);
+    bench_unescape(b, r"\xff", b'\xff', |s, cb| unescape_byte_str(s, cb));
 }
 
 // C str
@@ -140,9 +153,7 @@ fn bench_unescape_c_str(b: &mut test::Bencher, s: &str, expected: MixedUnit) {
     assert_eq!(input.len(), LEN * s.len());
     b.iter(|| {
         let mut output = vec![];
-        unescape_mixed(&input, Mode::CStr, &mut |range, res| {
-            output.push((range, res))
-        });
+        unescape_c_str(&input, &mut |range, res| output.push((range, res)));
         assert_eq!(output.len(), LEN);
         assert_eq!(output[0], ((0..s.len()), Ok(expected)));
     });
