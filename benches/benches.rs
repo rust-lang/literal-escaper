@@ -3,7 +3,8 @@
 extern crate test;
 
 use rustc_literal_escaper::*;
-use std::iter::repeat_n;
+use std::ops::Range;
+use std::{array, iter};
 
 const LEN: usize = 10_000;
 
@@ -23,9 +24,7 @@ fn bench_skip_ascii_whitespace(b: &mut test::Bencher) {
         // skip_ascii_whitespace(&mut input.chars(), 0, &mut |range, res| {
         //     output.push((range, res))
         // });
-        unescape_unicode(&input, Mode::Str, &mut |range, res| {
-            output.push((range, res))
-        });
+        unescape_str(&input, |range, res| output.push((range, res)));
         assert_eq!(
             output,
             [((0..LEN + 2), Err(EscapeError::MultipleSkippedLinesWarning))]
@@ -37,138 +36,385 @@ fn bench_skip_ascii_whitespace(b: &mut test::Bencher) {
 // Check raw
 //
 
-fn bench_check_raw(b: &mut test::Bencher, c: char, mode: Mode) {
-    let input: String = test::black_box(repeat_n(c, LEN).collect());
-    assert_eq!(input.len(), LEN * c.len_utf8());
-    b.iter(|| {
-        let mut output = vec![];
-        unescape_unicode(&input, mode, &mut |range, res| output.push((range, res)));
-        assert_eq!(output.len(), LEN);
-        assert_eq!(output[0], ((0..c.len_utf8()), Ok(c)));
-    });
+macro_rules! fn_bench_check_raw {
+    ($name:ident, $unit:ty, $check_raw:ident) => {
+        fn $name(b: &mut test::Bencher, s: &str, expected: &[$unit]) {
+            let input: String = test::black_box([s; LEN].join(""));
+            assert_eq!(input.len(), LEN * s.len());
+            b.iter(|| {
+                let mut output = Vec::with_capacity(expected.len());
+
+                $check_raw(&input, |range, res| output.push((range, res)));
+                assert_eq!(output.len(), LEN * s.chars().count());
+
+                // check that the output is what is expected and comes from the right input bytes
+                for ((i, &e), (p, c)) in expected.iter().enumerate().zip(s.char_indices()) {
+                    assert_eq!(output[i], ((p..p + c.len_utf8()), Ok(e)));
+                }
+            });
+        }
+    };
 }
+
+fn_bench_check_raw!(bench_check_raw_str, char, check_raw_str);
+fn_bench_check_raw!(bench_check_raw_byte_str, u8, check_raw_byte_str);
+fn_bench_check_raw!(bench_check_raw_c_str, char, check_raw_c_str);
 
 // raw str
 
 #[bench]
 fn bench_check_raw_str_ascii(b: &mut test::Bencher) {
-    bench_check_raw(b, 'a', Mode::RawStr);
+    bench_check_raw_str(b, "a", &['a'; LEN]);
+}
+
+#[bench]
+fn bench_check_raw_str_non_ascii(b: &mut test::Bencher) {
+    bench_check_raw_str(b, "🦀", &['🦀'; LEN]);
 }
 
 #[bench]
 fn bench_check_raw_str_unicode(b: &mut test::Bencher) {
-    bench_check_raw(b, '🦀', Mode::RawStr);
+    bench_check_raw_str(
+        b,
+        "a🦀🚀z",
+        &array::from_fn::<_, { 4 * LEN }, _>(|i| match i % 4 {
+            0 => 'a',
+            1 => '🦀',
+            2 => '🚀',
+            3 => 'z',
+            _ => unreachable!(),
+        }),
+    );
 }
 
 // raw byte str
 
 #[bench]
-fn bench_check_raw_byte_str(b: &mut test::Bencher) {
-    bench_check_raw(b, 'a', Mode::RawByteStr);
+fn bench_check_raw_byte_str_ascii(b: &mut test::Bencher) {
+    bench_check_raw_byte_str(b, "a", &[b'a'; LEN]);
 }
 
 // raw C str
 
 #[bench]
 fn bench_check_raw_c_str_ascii(b: &mut test::Bencher) {
-    bench_check_raw(b, 'a', Mode::RawCStr);
+    bench_check_raw_c_str(b, "a", &['a'; LEN]);
+}
+
+#[bench]
+fn bench_check_raw_c_str_non_ascii(b: &mut test::Bencher) {
+    bench_check_raw_c_str(b, "🦀", &['🦀'; LEN]);
 }
 
 #[bench]
 fn bench_check_raw_c_str_unicode(b: &mut test::Bencher) {
-    bench_check_raw(b, '🦀', Mode::RawCStr);
+    bench_check_raw_c_str(
+        b,
+        "a🦀🚀z",
+        &array::from_fn::<_, { 4 * LEN }, _>(|i| match i % 4 {
+            0 => 'a',
+            1 => '🦀',
+            2 => '🚀',
+            3 => 'z',
+            _ => unreachable!(),
+        }),
+    );
 }
 
 //
 // Unescape
 //
 
-fn bench_unescape(b: &mut test::Bencher, s: &str, mode: Mode, expected: char) {
-    let input: String = test::black_box(repeat_n(s, LEN).collect());
-    assert_eq!(input.len(), LEN * s.len());
-    b.iter(|| {
-        let mut output = vec![];
-        unescape_unicode(&input, mode, &mut |range, res| output.push((range, res)));
-        assert_eq!(output.len(), LEN);
-        assert_eq!(output[0], ((0..s.len()), Ok(expected)));
-    });
+macro_rules! fn_bench_unescape {
+    ($name:ident, $unit:ty, $unescape:ident) => {
+        fn $name(
+            b: &mut test::Bencher,
+            s: &str,
+            expected: &[(Range<usize>, Result<$unit, EscapeError>)],
+        ) {
+            let input: String = test::black_box([s; LEN].join(""));
+            b.iter(|| {
+                let mut output = Vec::with_capacity(expected.len());
+
+                $unescape(&input, |range, res| output.push((range, res)));
+                //assert_eq!(output.len(), LEN * s.chars().count());
+
+                // check that the output is what is expected and comes from the right input bytes
+                for (i, e) in expected.iter().enumerate() {
+                    assert_eq!(output[i], *e);
+                }
+            });
+        }
+    };
 }
+
+fn_bench_unescape!(bench_unescape_str, char, unescape_str);
+fn_bench_unescape!(bench_unescape_byte_str, u8, unescape_byte_str);
+fn_bench_unescape!(bench_unescape_c_str, MixedUnit, unescape_c_str);
 
 // str
 
 #[bench]
-fn bench_unescape_str_trivial(b: &mut test::Bencher) {
-    bench_unescape(b, r"a", Mode::Str, 'a');
-}
-
-#[bench]
 fn bench_unescape_str_ascii(b: &mut test::Bencher) {
-    bench_unescape(b, r"\n", Mode::Str, '\n');
+    bench_unescape_str(
+        b,
+        r"a",
+        &array::from_fn::<_, LEN, _>(|i| (i..i + 1, Ok('a'))),
+    );
 }
 
 #[bench]
-fn bench_unescape_str_hex(b: &mut test::Bencher) {
-    bench_unescape(b, r"\x22", Mode::Str, '"');
+fn bench_unescape_str_non_ascii(b: &mut test::Bencher) {
+    bench_unescape_str(
+        b,
+        r"🦀",
+        &array::from_fn::<_, LEN, _>(|i| (4 * i..4 * (i + 1), Ok('🦀'))),
+    );
 }
 
 #[bench]
 fn bench_unescape_str_unicode(b: &mut test::Bencher) {
-    bench_unescape(b, r"\u{1f980}", Mode::Str, '🦀');
+    let input = "a🦀🚀z";
+    let l = input.len();
+    bench_unescape_str(
+        b,
+        input,
+        &array::from_fn::<_, { 4 * LEN }, _>(|i| match i % 4 {
+            0 => (i / 4 * l..i / 4 * l + 1, Ok('a')),
+            1 => (i / 4 * l + 1..i / 4 * l + 5, Ok('🦀')),
+            2 => (i / 4 * l + 5..i / 4 * l + 9, Ok('🚀')),
+            3 => (i / 4 * l + 9..i / 4 * l + 10, Ok('z')),
+            _ => unreachable!(),
+        }),
+    );
+}
+
+#[bench]
+fn bench_unescape_str_ascii_escape(b: &mut test::Bencher) {
+    bench_unescape_str(
+        b,
+        r"\n",
+        &array::from_fn::<_, LEN, _>(|i| (2 * i..2 * (i + 1), Ok('\n'))),
+    );
+}
+
+#[bench]
+fn bench_unescape_str_hex_escape(b: &mut test::Bencher) {
+    bench_unescape_str(
+        b,
+        r"\x22",
+        &array::from_fn::<_, LEN, _>(|i| (4 * i..4 * (i + 1), Ok('"'))),
+    );
+}
+
+#[bench]
+fn bench_unescape_str_unicode_escape(b: &mut test::Bencher) {
+    let input = r"\u{1f980}\u{1f680}";
+    let l = input.len();
+    bench_unescape_str(
+        b,
+        input,
+        &array::from_fn::<_, LEN, _>(|i| {
+            if i % 2 == 0 {
+                (i / 2 * l..i / 2 * l + 9, Ok('🦀'))
+            } else {
+                (i / 2 * l + 9..i / 2 * l + 18, Ok('🚀'))
+            }
+        }),
+    );
+}
+
+#[bench]
+fn bench_unescape_str_mixed_escape(b: &mut test::Bencher) {
+    let inputs = [r"\n", r"\x22", r"\u{1f980}", r"\u{1f680}"];
+    let n = inputs.len();
+    let input = inputs.join("");
+    let l = input.len();
+    bench_unescape_str(
+        b,
+        &input,
+        &iter::from_fn({
+            let mut i = 0;
+            move || {
+                let res = Some(match i % n {
+                    0 => (i / n * l..i / n * l + 2, Ok('\n')),
+                    1 => (i / n * l + 2..i / n * l + 6, Ok('"')),
+                    2 => (i / n * l + 6..i / n * l + 15, Ok('🦀')),
+                    3 => (i / n * l + 15..i / n * l + 24, Ok('🚀')),
+                    r if r >= n => unreachable!(),
+                    _ => unimplemented!(),
+                });
+                i += 1;
+                res
+            }
+        })
+        .take(n * LEN)
+        .collect::<Vec<_>>(),
+    );
 }
 
 // byte str
 
 #[bench]
-fn bench_unescape_byte_str_trivial(b: &mut test::Bencher) {
-    bench_unescape(b, r"a", Mode::ByteStr, 'a');
-}
-
-#[bench]
 fn bench_unescape_byte_str_ascii(b: &mut test::Bencher) {
-    bench_unescape(b, r"\n", Mode::ByteStr, b'\n' as char);
+    bench_unescape_byte_str(
+        b,
+        r"a",
+        &array::from_fn::<_, { LEN }, _>(|i| (i..i + 1, Ok(b'a'))),
+    );
 }
 
 #[bench]
-fn bench_unescape_byte_str_hex(b: &mut test::Bencher) {
-    bench_unescape(b, r"\xff", Mode::ByteStr, b'\xff' as char);
+fn bench_unescape_byte_str_ascii_escape(b: &mut test::Bencher) {
+    bench_unescape_byte_str(
+        b,
+        r"\n",
+        &array::from_fn::<_, { LEN }, _>(|i| (2 * i..2 * (i + 1), Ok(b'\n'))),
+    );
+}
+
+#[bench]
+fn bench_unescape_byte_str_hex_escape(b: &mut test::Bencher) {
+    bench_unescape_byte_str(
+        b,
+        r"\xff",
+        &array::from_fn::<_, { LEN }, _>(|i| (4 * i..4 * (i + 1), Ok(b'\xff'))),
+    );
+}
+
+#[bench]
+fn bench_unescape_byte_str_mixed_escape(b: &mut test::Bencher) {
+    let inputs = [r"a", r"\n", r"\xff", r"z"];
+    let input = inputs.join("");
+    let n = inputs.len();
+    let l = input.len();
+    bench_unescape_byte_str(
+        b,
+        &input,
+        &iter::from_fn({
+            let mut i = 0;
+            move || {
+                let res = Some(match i % n {
+                    0 => (i / n * l..i / n * l + 1, Ok(b'a')),
+                    1 => (i / n * l + 1..i / n * l + 3, Ok(b'\n')),
+                    2 => (i / n * l + 3..i / n * l + 7, Ok(b'\xff')),
+                    3 => (i / n * l + 7..i / n * l + 8, Ok(b'z')),
+                    r if r >= n => unreachable!(),
+                    _ => unimplemented!(),
+                });
+                i += 1;
+                res
+            }
+        })
+        .take(n * LEN)
+        .collect::<Vec<_>>(),
+    );
 }
 
 // C str
 
-fn bench_unescape_c_str(b: &mut test::Bencher, s: &str, expected: MixedUnit) {
-    let input: String = test::black_box(repeat_n(s, LEN).collect());
-    assert_eq!(input.len(), LEN * s.len());
-    b.iter(|| {
-        let mut output = vec![];
-        unescape_mixed(&input, Mode::CStr, &mut |range, res| {
-            output.push((range, res))
-        });
-        assert_eq!(output.len(), LEN);
-        assert_eq!(output[0], ((0..s.len()), Ok(expected)));
-    });
-}
-
-#[bench]
-fn bench_unescape_c_str_trivial(b: &mut test::Bencher) {
-    bench_unescape_c_str(b, r"a", MixedUnit::Char('a'));
-}
-
 #[bench]
 fn bench_unescape_c_str_ascii(b: &mut test::Bencher) {
-    bench_unescape_c_str(b, r"\n", MixedUnit::Char('\n'));
+    bench_unescape_c_str(
+        b,
+        r"a",
+        &array::from_fn::<_, { LEN }, _>(|i| (i..i + 1, Ok(MixedUnit::Char('a')))),
+    );
 }
 
 #[bench]
-fn bench_unescape_c_str_hex_ascii(b: &mut test::Bencher) {
-    bench_unescape_c_str(b, r"\x22", MixedUnit::Char('"'));
-}
-
-#[bench]
-fn bench_unescape_c_str_hex_byte(b: &mut test::Bencher) {
-    bench_unescape_c_str(b, r"\xff", MixedUnit::HighByte(b'\xff'));
+fn bench_unescape_c_str_non_ascii(b: &mut test::Bencher) {
+    bench_unescape_c_str(
+        b,
+        r"🦀",
+        &array::from_fn::<_, LEN, _>(|i| (4 * i..4 * (i + 1), Ok(MixedUnit::Char('🦀')))),
+    );
 }
 
 #[bench]
 fn bench_unescape_c_str_unicode(b: &mut test::Bencher) {
-    bench_unescape_c_str(b, r"\u{1f980}", MixedUnit::Char('🦀'));
+    let input = "a🦀🚀z";
+    let l = input.len();
+    bench_unescape_c_str(
+        b,
+        input,
+        &array::from_fn::<_, { 4 * LEN }, _>(|i| match i % 4 {
+            0 => (i / 4 * l..i / 4 * l + 1, Ok(MixedUnit::Char('a'))),
+            1 => (i / 4 * l + 1..i / 4 * l + 5, Ok(MixedUnit::Char('🦀'))),
+            2 => (i / 4 * l + 5..i / 4 * l + 9, Ok(MixedUnit::Char('🚀'))),
+            3 => (i / 4 * l + 9..i / 4 * l + 10, Ok(MixedUnit::Char('z'))),
+            _ => unreachable!(),
+        }),
+    );
+}
+
+#[bench]
+fn bench_unescape_c_str_ascii_escape(b: &mut test::Bencher) {
+    bench_unescape_c_str(
+        b,
+        r"\n",
+        &array::from_fn::<_, { LEN }, _>(|i| (2 * i..2 * (i + 1), Ok(MixedUnit::Char('\n')))),
+    );
+}
+
+#[bench]
+fn bench_unescape_c_str_hex_escape_ascii(b: &mut test::Bencher) {
+    bench_unescape_c_str(
+        b,
+        r"\x22",
+        &array::from_fn::<_, { LEN }, _>(|i| (4 * i..4 * (i + 1), Ok(MixedUnit::Char('"')))),
+    );
+}
+
+#[bench]
+fn bench_unescape_c_str_hex_escape_byte(b: &mut test::Bencher) {
+    bench_unescape_c_str(
+        b,
+        r"\xff",
+        &array::from_fn::<_, { LEN }, _>(|i| {
+            (4 * i..4 * (i + 1), Ok(MixedUnit::HighByte(b'\xff')))
+        }),
+    );
+}
+
+#[bench]
+fn bench_unescape_c_str_unicode_escape(b: &mut test::Bencher) {
+    bench_unescape_c_str(
+        b,
+        r"\u{1f980}",
+        &array::from_fn::<_, { LEN }, _>(|i| (9 * i..9 * (i + 1), Ok(MixedUnit::Char('🦀')))),
+    );
+}
+
+#[bench]
+fn bench_unescape_c_str_mixed_escape(b: &mut test::Bencher) {
+    let inputs = [r"\n", r"\x22", r"\u{1f980}", r"\u{1f680}", r"\xff"];
+    let n = inputs.len();
+    let input = inputs.join("");
+    let l = input.len();
+    bench_unescape_c_str(
+        b,
+        &input,
+        &iter::from_fn({
+            let mut i = 0;
+            move || {
+                let res = Some(match i % n {
+                    0 => (i / n * l..i / n * l + 2, Ok(MixedUnit::Char('\n'))),
+                    1 => (i / n * l + 2..i / n * l + 6, Ok(MixedUnit::Char('"'))),
+                    2 => (i / n * l + 6..i / n * l + 15, Ok(MixedUnit::Char('🦀'))),
+                    3 => (i / n * l + 15..i / n * l + 24, Ok(MixedUnit::Char('🚀'))),
+                    4 => (
+                        i / n * l + 24..i / n * l + 28,
+                        Ok(MixedUnit::HighByte(b'\xff')),
+                    ),
+                    r if r >= n => unreachable!(),
+                    _ => unimplemented!(),
+                });
+                i += 1;
+                res
+            }
+        })
+        .take(n * LEN)
+        .collect::<Vec<_>>(),
+    );
 }
