@@ -5,8 +5,6 @@ use std::ffi::CStr;
 use std::ops::Range;
 use std::str::Chars;
 
-use Mode::*;
-
 #[cfg(test)]
 mod tests;
 
@@ -78,60 +76,6 @@ impl EscapeError {
             self,
             EscapeError::UnskippedWhitespaceWarning | EscapeError::MultipleSkippedLinesWarning
         )
-    }
-}
-
-/// Takes the contents of a literal (without quotes)
-/// and produces a sequence of errors,
-/// which are returned by invoking `error_callback`.
-pub fn unescape_for_errors(
-    src: &str,
-    mode: Mode,
-    mut error_callback: impl FnMut(Range<usize>, EscapeError),
-) {
-    match mode {
-        Char => {
-            let mut chars = src.chars();
-            if let Err(e) = str::unescape_single(&mut chars) {
-                error_callback(0..(src.len() - chars.as_str().len()), e);
-            }
-        }
-        Byte => {
-            let mut chars = src.chars();
-            if let Err(e) = <[u8]>::unescape_single(&mut chars) {
-                error_callback(0..(src.len() - chars.as_str().len()), e);
-            }
-        }
-        Str => unescape_str(src, |range, res| {
-            if let Err(e) = res {
-                error_callback(range, e);
-            }
-        }),
-        ByteStr => unescape_byte_str(src, |range, res| {
-            if let Err(e) = res {
-                error_callback(range, e);
-            }
-        }),
-        CStr => unescape_c_str(src, |range, res| {
-            if let Err(e) = res {
-                error_callback(range, e);
-            }
-        }),
-        RawStr => check_raw_str(src, |range, res| {
-            if let Err(e) = res {
-                error_callback(range, e);
-            }
-        }),
-        RawByteStr => check_raw_byte_str(src, |range, res| {
-            if let Err(e) = res {
-                error_callback(range, e);
-            }
-        }),
-        RawCStr => check_raw_c_str(src, |range, res| {
-            if let Err(e) = res {
-                error_callback(range, e);
-            }
-        }),
     }
 }
 
@@ -217,6 +161,15 @@ impl CheckRaw for [u8] {
     }
 }
 
+fn char2byte(c: char) -> Result<u8, EscapeError> {
+    // do NOT do: c.try_into().ok_or(EscapeError::NonAsciiCharInByte)
+    if c.is_ascii() {
+        Ok(c as u8)
+    } else {
+        Err(EscapeError::NonAsciiCharInByte)
+    }
+}
+
 impl CheckRaw for CStr {
     type RawUnit = char;
 
@@ -263,6 +216,42 @@ pub fn unescape_c_str(
     callback: impl FnMut(Range<usize>, Result<MixedUnit, EscapeError>),
 ) {
     CStr::unescape(src, callback)
+}
+
+/// Used for mixed utf8 string literals, i.e. those that allow both unicode
+/// chars and high bytes.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum MixedUnit {
+    /// Used for ASCII chars (written directly or via `\x00`..`\x7f` escapes)
+    /// and Unicode chars (written directly or via `\u` escapes).
+    ///
+    /// For example, if '¥' appears in a string it is represented here as
+    /// `MixedUnit::Char('¥')`, and it will be appended to the relevant byte
+    /// string as the two-byte UTF-8 sequence `[0xc2, 0xa5]`
+    Char(char),
+
+    /// Used for high bytes (`\x80`..`\xff`).
+    ///
+    /// For example, if `\xa5` appears in a string it is represented here as
+    /// `MixedUnit::HighByte(0xa5)`, and it will be appended to the relevant
+    /// byte string as the single byte `0xa5`.
+    HighByte(u8),
+}
+
+impl From<char> for MixedUnit {
+    fn from(c: char) -> Self {
+        MixedUnit::Char(c)
+    }
+}
+
+impl From<u8> for MixedUnit {
+    fn from(n: u8) -> Self {
+        if n.is_ascii() {
+            MixedUnit::Char(n as char)
+        } else {
+            MixedUnit::HighByte(n)
+        }
+    }
 }
 
 /// trait for unescaping escape sequences in strings
@@ -347,147 +336,6 @@ trait Unescape {
             };
             let end = src.len() - chars.as_str().len();
             callback(start..end, res);
-        }
-    }
-}
-
-impl Unescape for str {
-    type Unit = char;
-
-    const ZERO_RESULT: Result<Self::Unit, EscapeError> = Ok('\0');
-
-    fn char2unit(c: char) -> Result<Self::Unit, EscapeError> {
-        Ok(c)
-    }
-
-    fn hex2unit(b: u8) -> Result<Self::Unit, EscapeError> {
-        if b.is_ascii() {
-            Ok(b as char)
-        } else {
-            Err(EscapeError::OutOfRangeHexEscape)
-        }
-    }
-
-    /// Converts the result of a unicode escape to the unit type
-    fn unicode2unit(r: Result<char, EscapeError>) -> Result<Self::Unit, EscapeError> {
-        r
-    }
-}
-
-impl Unescape for [u8] {
-    type Unit = u8;
-
-    const ZERO_RESULT: Result<Self::Unit, EscapeError> = Ok(b'\0');
-
-    fn char2unit(c: char) -> Result<Self::Unit, EscapeError> {
-        char2byte(c)
-    }
-
-    fn hex2unit(b: u8) -> Result<Self::Unit, EscapeError> {
-        Ok(b)
-    }
-
-    /// Converts the result of a unicode escape to the unit type
-    fn unicode2unit(_r: Result<char, EscapeError>) -> Result<Self::Unit, EscapeError> {
-        Err(EscapeError::UnicodeEscapeInByte)
-    }
-}
-
-impl Unescape for CStr {
-    type Unit = MixedUnit;
-
-    const ZERO_RESULT: Result<Self::Unit, EscapeError> = Err(EscapeError::NulInCStr);
-
-    fn char2unit(c: char) -> Result<Self::Unit, EscapeError> {
-        if c == '\0' {
-            Err(EscapeError::NulInCStr)
-        } else {
-            Ok(MixedUnit::Char(c))
-        }
-    }
-
-    fn hex2unit(byte: u8) -> Result<Self::Unit, EscapeError> {
-        if byte == b'\0' {
-            Err(EscapeError::NulInCStr)
-        } else if byte.is_ascii() {
-            Ok(MixedUnit::Char(byte as char))
-        } else {
-            Ok(MixedUnit::HighByte(byte))
-        }
-    }
-
-    /// Converts the result of a unicode escape to the unit type
-    fn unicode2unit(r: Result<char, EscapeError>) -> Result<Self::Unit, EscapeError> {
-        Self::char2unit(r?)
-    }
-}
-
-/// Used for mixed utf8 string literals, i.e. those that allow both unicode
-/// chars and high bytes.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum MixedUnit {
-    /// Used for ASCII chars (written directly or via `\x00`..`\x7f` escapes)
-    /// and Unicode chars (written directly or via `\u` escapes).
-    ///
-    /// For example, if '¥' appears in a string it is represented here as
-    /// `MixedUnit::Char('¥')`, and it will be appended to the relevant byte
-    /// string as the two-byte UTF-8 sequence `[0xc2, 0xa5]`
-    Char(char),
-
-    /// Used for high bytes (`\x80`..`\xff`).
-    ///
-    /// For example, if `\xa5` appears in a string it is represented here as
-    /// `MixedUnit::HighByte(0xa5)`, and it will be appended to the relevant
-    /// byte string as the single byte `0xa5`.
-    HighByte(u8),
-}
-
-impl From<char> for MixedUnit {
-    fn from(c: char) -> Self {
-        MixedUnit::Char(c)
-    }
-}
-
-impl From<u8> for MixedUnit {
-    fn from(n: u8) -> Self {
-        if n.is_ascii() {
-            MixedUnit::Char(n as char)
-        } else {
-            MixedUnit::HighByte(n)
-        }
-    }
-}
-
-/// What kind of literal do we parse.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Mode {
-    Char,
-
-    Byte,
-
-    Str,
-    RawStr,
-
-    ByteStr,
-    RawByteStr,
-
-    CStr,
-    RawCStr,
-}
-
-impl Mode {
-    pub fn in_double_quotes(self) -> bool {
-        match self {
-            Str | RawStr | ByteStr | RawByteStr | CStr | RawCStr => true,
-            Char | Byte => false,
-        }
-    }
-
-    pub fn prefix_noraw(self) -> &'static str {
-        match self {
-            Char | Str | RawStr => "",
-            Byte | ByteStr | RawByteStr => "b",
-            CStr | RawCStr => "c",
         }
     }
 }
@@ -594,11 +442,166 @@ where
     }
 }
 
-fn char2byte(c: char) -> Result<u8, EscapeError> {
-    // do NOT do: c.try_into().ok_or(EscapeError::NonAsciiCharInByte)
-    if c.is_ascii() {
-        Ok(c as u8)
-    } else {
-        Err(EscapeError::NonAsciiCharInByte)
+impl Unescape for str {
+    type Unit = char;
+
+    const ZERO_RESULT: Result<Self::Unit, EscapeError> = Ok('\0');
+
+    fn char2unit(c: char) -> Result<Self::Unit, EscapeError> {
+        Ok(c)
+    }
+
+    fn hex2unit(b: u8) -> Result<Self::Unit, EscapeError> {
+        if b.is_ascii() {
+            Ok(b as char)
+        } else {
+            Err(EscapeError::OutOfRangeHexEscape)
+        }
+    }
+
+    /// Converts the result of a unicode escape to the unit type
+    fn unicode2unit(r: Result<char, EscapeError>) -> Result<Self::Unit, EscapeError> {
+        r
+    }
+}
+
+impl Unescape for [u8] {
+    type Unit = u8;
+
+    const ZERO_RESULT: Result<Self::Unit, EscapeError> = Ok(b'\0');
+
+    fn char2unit(c: char) -> Result<Self::Unit, EscapeError> {
+        char2byte(c)
+    }
+
+    fn hex2unit(b: u8) -> Result<Self::Unit, EscapeError> {
+        Ok(b)
+    }
+
+    /// Converts the result of a unicode escape to the unit type
+    fn unicode2unit(_r: Result<char, EscapeError>) -> Result<Self::Unit, EscapeError> {
+        Err(EscapeError::UnicodeEscapeInByte)
+    }
+}
+
+impl Unescape for CStr {
+    type Unit = MixedUnit;
+
+    const ZERO_RESULT: Result<Self::Unit, EscapeError> = Err(EscapeError::NulInCStr);
+
+    fn char2unit(c: char) -> Result<Self::Unit, EscapeError> {
+        if c == '\0' {
+            Err(EscapeError::NulInCStr)
+        } else {
+            Ok(MixedUnit::Char(c))
+        }
+    }
+
+    fn hex2unit(byte: u8) -> Result<Self::Unit, EscapeError> {
+        if byte == b'\0' {
+            Err(EscapeError::NulInCStr)
+        } else if byte.is_ascii() {
+            Ok(MixedUnit::Char(byte as char))
+        } else {
+            Ok(MixedUnit::HighByte(byte))
+        }
+    }
+
+    /// Converts the result of a unicode escape to the unit type
+    fn unicode2unit(r: Result<char, EscapeError>) -> Result<Self::Unit, EscapeError> {
+        Self::char2unit(r?)
+    }
+}
+
+/// What kind of literal do we parse.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Mode {
+    Char,
+
+    Byte,
+
+    Str,
+    RawStr,
+
+    ByteStr,
+    RawByteStr,
+
+    CStr,
+    RawCStr,
+}
+
+impl Mode {
+    pub fn in_double_quotes(self) -> bool {
+        match self {
+            Mode::Str
+            | Mode::RawStr
+            | Mode::ByteStr
+            | Mode::RawByteStr
+            | Mode::CStr
+            | Mode::RawCStr => true,
+            Mode::Char | Mode::Byte => false,
+        }
+    }
+
+    pub fn prefix_noraw(self) -> &'static str {
+        match self {
+            Mode::Char | Mode::Str | Mode::RawStr => "",
+            Mode::Byte | Mode::ByteStr | Mode::RawByteStr => "b",
+            Mode::CStr | Mode::RawCStr => "c",
+        }
+    }
+}
+
+/// Takes the contents of a literal (without quotes)
+/// and produces a sequence of errors,
+/// which are returned by invoking `error_callback`.
+pub fn unescape_for_errors(
+    src: &str,
+    mode: Mode,
+    mut error_callback: impl FnMut(Range<usize>, EscapeError),
+) {
+    match mode {
+        Mode::Char => {
+            let mut chars = src.chars();
+            if let Err(e) = str::unescape_single(&mut chars) {
+                error_callback(0..(src.len() - chars.as_str().len()), e);
+            }
+        }
+        Mode::Byte => {
+            let mut chars = src.chars();
+            if let Err(e) = <[u8]>::unescape_single(&mut chars) {
+                error_callback(0..(src.len() - chars.as_str().len()), e);
+            }
+        }
+        Mode::Str => unescape_str(src, |range, res| {
+            if let Err(e) = res {
+                error_callback(range, e);
+            }
+        }),
+        Mode::ByteStr => unescape_byte_str(src, |range, res| {
+            if let Err(e) = res {
+                error_callback(range, e);
+            }
+        }),
+        Mode::CStr => unescape_c_str(src, |range, res| {
+            if let Err(e) = res {
+                error_callback(range, e);
+            }
+        }),
+        Mode::RawStr => check_raw_str(src, |range, res| {
+            if let Err(e) = res {
+                error_callback(range, e);
+            }
+        }),
+        Mode::RawByteStr => check_raw_byte_str(src, |range, res| {
+            if let Err(e) = res {
+                error_callback(range, e);
+            }
+        }),
+        Mode::RawCStr => check_raw_c_str(src, |range, res| {
+            if let Err(e) = res {
+                error_callback(range, e);
+            }
+        }),
     }
 }
