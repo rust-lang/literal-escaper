@@ -1,6 +1,7 @@
 //! Utilities for validating string and char literals and turning them into
 //! values they represent.
 
+use std::ffi::CStr;
 use std::ops::Range;
 use std::str::Chars;
 
@@ -138,37 +139,94 @@ pub fn unescape_for_errors(
 /// and produces a sequence of characters or errors,
 /// which are returned by invoking `callback`.
 /// NOTE: Does no escaping, but produces errors for bare carriage return ('\r').
-pub fn check_raw_str(src: &str, mut callback: impl FnMut(Range<usize>, Result<char, EscapeError>)) {
-    check_raw_common(src, Mode::RawStr, &mut callback)
+pub fn check_raw_str(src: &str, callback: impl FnMut(Range<usize>, Result<char, EscapeError>)) {
+    str::check_raw(src, callback);
 }
 
 /// Takes the contents of a raw byte string literal (without quotes)
 /// and produces a sequence of bytes or errors,
 /// which are returned by invoking `callback`.
 /// NOTE: Does no escaping, but produces errors for bare carriage return ('\r').
-pub fn check_raw_byte_str(
-    src: &str,
-    mut callback: impl FnMut(Range<usize>, Result<u8, EscapeError>),
-) {
-    check_raw_common(src, Mode::RawByteStr, &mut |r, res| {
-        callback(r, res.map(byte_from_char))
-    })
+pub fn check_raw_byte_str(src: &str, callback: impl FnMut(Range<usize>, Result<u8, EscapeError>)) {
+    <[u8]>::check_raw(src, callback);
 }
 
 /// Takes the contents of a raw C string literal (without quotes)
 /// and produces a sequence of characters or errors,
 /// which are returned by invoking `callback`.
 /// NOTE: Does no escaping, but produces errors for bare carriage return ('\r').
-pub fn check_raw_c_str(
-    src: &str,
-    mut callback: impl FnMut(Range<usize>, Result<char, EscapeError>),
-) {
-    check_raw_common(src, Mode::RawCStr, &mut |r, mut result| {
-        if let Ok('\0') = result {
-            result = Err(EscapeError::NulInCStr);
+pub fn check_raw_c_str(src: &str, callback: impl FnMut(Range<usize>, Result<char, EscapeError>)) {
+    CStr::check_raw(src, callback);
+}
+
+/// trait for checking raw strings
+trait CheckRaw {
+    /// Unit type of the implementing string type (`char` for string, `u8` for byte string)
+    type RawUnit;
+
+    /// Converts chars to the unit type of the literal type
+    fn char2raw_unit(c: char) -> Result<Self::RawUnit, EscapeError>;
+
+    /// Takes the contents of a raw literal (without quotes)
+    /// and produces a sequence of `Result<Self::RawUnit, EscapeError>`
+    /// which are returned via `callback`.
+    ///
+    /// NOTE: Does no escaping, but produces errors for bare carriage return ('\r').
+    fn check_raw(
+        src: &str,
+        mut callback: impl FnMut(Range<usize>, Result<Self::RawUnit, EscapeError>),
+    ) {
+        let mut chars = src.chars();
+        while let Some(c) = chars.next() {
+            let start = src.len() - chars.as_str().len() - c.len_utf8();
+            let res = match c {
+                '\r' => Err(EscapeError::BareCarriageReturnInRawString),
+                _ => Self::char2raw_unit(c),
+            };
+            let end = src.len() - chars.as_str().len();
+            callback(start..end, res);
         }
-        callback(r, result)
-    })
+
+        // Unfortunately, it is a bit unclear whether the following equivalent code is slower or faster: bug 141855
+        // src.char_indices().for_each(|(pos, c)| {
+        //     callback(
+        //         pos..pos + c.len_utf8(),
+        //         if c == '\r' {
+        //             Err(EscapeError::BareCarriageReturnInRawString)
+        //         } else {
+        //             Self::char2raw_unit(c)
+        //         },
+        //     );
+        // });
+    }
+}
+
+impl CheckRaw for str {
+    type RawUnit = char;
+
+    fn char2raw_unit(c: char) -> Result<Self::RawUnit, EscapeError> {
+        Ok(c)
+    }
+}
+
+impl CheckRaw for [u8] {
+    type RawUnit = u8;
+
+    fn char2raw_unit(c: char) -> Result<Self::RawUnit, EscapeError> {
+        char2byte(c)
+    }
+}
+
+impl CheckRaw for CStr {
+    type RawUnit = char;
+
+    fn char2raw_unit(c: char) -> Result<Self::RawUnit, EscapeError> {
+        if c == '\0' {
+            Err(EscapeError::NulInCStr)
+        } else {
+            Ok(c)
+        }
+    }
 }
 
 /// Takes the contents of a string literal (without quotes)
@@ -497,34 +555,18 @@ where
     *chars = tail.chars();
 }
 
-/// Takes a contents of a string literal (without quotes) and produces a
-/// sequence of characters or errors.
-/// NOTE: Raw strings do not perform any explicit character escaping, here we
-/// only produce errors on bare CR.
-fn check_raw_common<F>(src: &str, mode: Mode, callback: &mut F)
-where
-    F: FnMut(Range<usize>, Result<char, EscapeError>),
-{
-    let mut chars = src.chars();
-    let allow_unicode_chars = mode.allow_unicode_chars(); // get this outside the loop
-
-    // The `start` and `end` computation here matches the one in
-    // `unescape_non_raw_common` for consistency, even though this function
-    // doesn't have to worry about skipping any chars.
-    while let Some(c) = chars.next() {
-        let start = src.len() - chars.as_str().len() - c.len_utf8();
-        let res = match c {
-            '\r' => Err(EscapeError::BareCarriageReturnInRawString),
-            _ => ascii_check(c, allow_unicode_chars),
-        };
-        let end = src.len() - chars.as_str().len();
-        callback(start..end, res);
-    }
-}
-
 #[inline]
 fn byte_from_char(c: char) -> u8 {
     let res = c as u32;
     debug_assert!(res <= u8::MAX as u32, "guaranteed because of ByteStr");
     res as u8
+}
+
+fn char2byte(c: char) -> Result<u8, EscapeError> {
+    // do NOT do: c.try_into().ok_or(EscapeError::NonAsciiCharInByte)
+    if c.is_ascii() {
+        Ok(c as u8)
+    } else {
+        Err(EscapeError::NonAsciiCharInByte)
+    }
 }
