@@ -11,16 +11,26 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  checks:
+  stable-checks:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
-          components: clippy, rustfmt
+          components: rustfmt
       - run: cargo fmt -- --check
       - run: cargo test
-      - run: cargo clippy
       # Ensure that no untracked or tracked files have been added or modified.
       - run: git diff --check --exit-code
+
+  nightly-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: nightly
+          components: clippy
+      # Check all entries, including tests and benchmarks.
+      - run: cargo clippy --all-targets
