@@ -109,6 +109,7 @@ where
 
 /// Used for mixed utf8 string literals, i.e. those that allow both unicode
 /// chars and high bytes.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum MixedUnit {
     /// Used for ASCII chars (written directly or via `\x00`..`\x7f` escapes)
     /// and Unicode chars (written directly or via `\u` escapes).
