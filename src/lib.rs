@@ -1,5 +1,5 @@
-//! Utilities for validating string and char literals and turning them into
-//! values they represent.
+//! Utilities for validating (raw) string, char, and byte literals and
+//! turning escape sequences into the values they represent.
 
 use std::ffi::CStr;
 use std::ops::Range;
@@ -8,9 +8,9 @@ use std::str::Chars;
 #[cfg(test)]
 mod tests;
 
-/// Errors and warnings that can occur during string unescaping. They mostly
-/// relate to malformed escape sequences, but there are a few that are about
-/// other problems.
+/// Errors and warnings that can occur during string, char, and byte unescaping.
+///
+/// Mostly relating to malformed escape sequences, but also a few other problems.
 #[derive(Debug, PartialEq, Eq)]
 pub enum EscapeError {
     /// Expected 1 char, but 0 were found.
@@ -58,7 +58,7 @@ pub enum EscapeError {
     /// Non-ascii character in byte literal, byte string literal, or raw byte string literal.
     NonAsciiCharInByte,
 
-    // `\0` in a C string literal.
+    /// `\0` in a C string literal.
     NulInCStr,
 
     /// After a line ending with '\', the next line contains whitespace
@@ -79,6 +79,8 @@ impl EscapeError {
     }
 }
 
+/// Check a raw string literal for validity
+///
 /// Takes the contents of a raw string literal (without quotes)
 /// and produces a sequence of characters or errors,
 /// which are returned by invoking `callback`.
@@ -87,6 +89,8 @@ pub fn check_raw_str(src: &str, callback: impl FnMut(Range<usize>, Result<char, 
     str::check_raw(src, callback);
 }
 
+/// Check a raw byte string literal for validity
+///
 /// Takes the contents of a raw byte string literal (without quotes)
 /// and produces a sequence of bytes or errors,
 /// which are returned by invoking `callback`.
@@ -95,6 +99,8 @@ pub fn check_raw_byte_str(src: &str, callback: impl FnMut(Range<usize>, Result<u
     <[u8]>::check_raw(src, callback);
 }
 
+/// Check a raw C string literal for validity
+///
 /// Takes the contents of a raw C string literal (without quotes)
 /// and produces a sequence of characters or errors,
 /// which are returned by invoking `callback`.
@@ -103,7 +109,7 @@ pub fn check_raw_c_str(src: &str, callback: impl FnMut(Range<usize>, Result<char
     CStr::check_raw(src, callback);
 }
 
-/// trait for checking raw strings
+/// Trait for checking raw string literals for validity
 trait CheckRaw {
     /// Unit type of the implementing string type (`char` for string, `u8` for byte string)
     type RawUnit;
@@ -161,6 +167,7 @@ impl CheckRaw for [u8] {
     }
 }
 
+/// Turn an ascii char into a byte
 fn char2byte(c: char) -> Result<u8, EscapeError> {
     // do NOT do: c.try_into().ok_or(EscapeError::NonAsciiCharInByte)
     if c.is_ascii() {
@@ -182,18 +189,24 @@ impl CheckRaw for CStr {
     }
 }
 
+/// Unescape a char literal
+///
 /// Takes the contents of a char literal (without quotes),
 /// and returns an unescaped char or an error.
 pub fn unescape_char(src: &str) -> Result<char, EscapeError> {
     str::unescape_single(&mut src.chars())
 }
 
+/// Unescape a byte literal
+///
 /// Takes the contents of a byte literal (without quotes),
 /// and returns an unescaped byte or an error.
 pub fn unescape_byte(src: &str) -> Result<u8, EscapeError> {
     <[u8]>::unescape_single(&mut src.chars())
 }
 
+/// Unescape a string literal
+///
 /// Takes the contents of a string literal (without quotes)
 /// and produces a sequence of escaped characters or errors,
 /// which are returned by invoking `callback`.
@@ -201,6 +214,8 @@ pub fn unescape_str(src: &str, callback: impl FnMut(Range<usize>, Result<char, E
     str::unescape(src, callback)
 }
 
+/// Unescape a byte string literal
+///
 /// Takes the contents of a byte string literal (without quotes)
 /// and produces a sequence of escaped bytes or errors,
 /// which are returned by invoking `callback`.
@@ -208,6 +223,8 @@ pub fn unescape_byte_str(src: &str, callback: impl FnMut(Range<usize>, Result<u8
     <[u8]>::unescape(src, callback)
 }
 
+/// Unescape a C string literal
+///
 /// Takes the contents of a C string literal (without quotes)
 /// and produces a sequence of escaped MixedUnits or errors,
 /// which are returned by invoking `callback`.
@@ -218,6 +235,8 @@ pub fn unescape_c_str(
     CStr::unescape(src, callback)
 }
 
+/// Enum representing either a char or a byte
+///
 /// Used for mixed utf8 string literals, i.e. those that allow both unicode
 /// chars and high bytes.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -254,7 +273,7 @@ impl From<u8> for MixedUnit {
     }
 }
 
-/// trait for unescaping escape sequences in strings
+/// Trait for unescaping escape sequences in strings
 trait Unescape {
     /// Unit type of the implementing string type (`char` for string, `u8` for byte string)
     type Unit: From<u8>;
@@ -307,7 +326,9 @@ trait Unescape {
         }
     }
 
-    /// Takes the contents of a raw literal (without quotes)
+    /// Unescape a string literal
+    ///
+    /// Takes the contents of a raw string literal (without quotes)
     /// and produces a sequence of `Result<Self::Unit, EscapeError>`
     /// which are returned via `callback`.
     fn unescape(
@@ -340,7 +361,9 @@ trait Unescape {
     }
 }
 
-/// Parse the character of an ASCII escape (except nul) without the leading backslash.
+/// Interpret a non-nul ASCII escape
+///
+/// Parses the character of an ASCII escape (except nul) without the leading backslash.
 fn simple_escape(c: char) -> Result<u8, char> {
     // Previous character was '\\', unescape what follows.
     Ok(match c {
@@ -354,7 +377,9 @@ fn simple_escape(c: char) -> Result<u8, char> {
     })
 }
 
-/// Parse the two hexadecimal characters of a hexadecimal escape without the leading r"\x".
+/// Interpret a hexadecimal escape
+///
+/// Parses the two hexadecimal characters of a hexadecimal escape without the leading r"\x".
 fn hex_escape(chars: &mut impl Iterator<Item = char>) -> Result<u8, EscapeError> {
     let hi = chars.next().ok_or(EscapeError::TooShortHexEscape)?;
     let hi = hi.to_digit(16).ok_or(EscapeError::InvalidCharInHexEscape)?;
@@ -365,6 +390,8 @@ fn hex_escape(chars: &mut impl Iterator<Item = char>) -> Result<u8, EscapeError>
     Ok((hi * 16 + lo) as u8)
 }
 
+/// Interpret a unicode escape
+///
 /// Parse the braces with hexadecimal characters (and underscores) part of a unicode escape.
 /// This r"{...}" normally comes after r"\u" and cannot start with an underscore.
 fn unicode_escape(chars: &mut impl Iterator<Item = char>) -> Result<u32, EscapeError> {
@@ -412,6 +439,8 @@ fn unicode_escape(chars: &mut impl Iterator<Item = char>) -> Result<u32, EscapeE
     }
 }
 
+/// Interpret a string continuation escape (https://doc.rust-lang.org/reference/expressions/literal-expr.html#string-continuation-escapes)
+///
 /// Skip ASCII whitespace, except for the formfeed character
 /// (see [this issue](https://github.com/rust-lang/rust/issues/136600)).
 /// Warns on unescaped newline and following non-ASCII whitespace.
@@ -513,7 +542,7 @@ impl Unescape for CStr {
     }
 }
 
-/// What kind of literal do we parse.
+/// Enum of the different kinds of literal
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Mode {
     Char,
@@ -552,10 +581,14 @@ impl Mode {
     }
 }
 
+/// Check a literal only for errors
+///
 /// Takes the contents of a literal (without quotes)
-/// and produces a sequence of errors,
+/// and produces a sequence of only errors,
 /// which are returned by invoking `error_callback`.
-pub fn unescape_for_errors(
+///
+/// NB Does not produce any output other than errors
+pub fn check_for_errors(
     src: &str,
     mode: Mode,
     mut error_callback: impl FnMut(Range<usize>, EscapeError),
