@@ -37,127 +37,121 @@ fn bench_skip_ascii_whitespace(b: &mut test::Bencher) {
 // Check raw
 //
 
-#[allow(clippy::type_complexity)]
-fn bench_check_raw<UNIT: Into<char> + PartialEq + Debug + Copy>(
-    b: &mut test::Bencher,
-    c: UNIT,
-    check_raw: fn(&str, &mut dyn FnMut(Range<usize>, Result<UNIT, EscapeError>)),
-) {
-    let input: String = test::black_box(repeat_n(c.into(), LEN).collect());
-    assert_eq!(input.len(), LEN * c.into().len_utf8());
+macro_rules! fn_bench_check_raw {
+    ($name:ident, $unit:ty, $check_raw:ident) => {
+        fn $name(b: &mut test::Bencher, s: &str, expected: $unit) {
+            let input: String = test::black_box(repeat_n(s, LEN).collect());
+            assert_eq!(input.len(), LEN * s.len());
+            b.iter(|| {
+                let mut output = vec![];
 
-    b.iter(|| {
-        let mut output = vec![];
-
-        check_raw(&input, &mut |range, res| output.push((range, res)));
-        assert_eq!(output.len(), LEN);
-        assert_eq!(output[0], (0..c.into().len_utf8(), Ok(c)));
-    });
+                $check_raw(&input, |range, res| output.push((range, res)));
+                assert_eq!(output.len(), LEN);
+                assert_eq!(output[0], ((0..s.len()), Ok(expected)));
+            });
+        }
+    };
 }
+
+fn_bench_check_raw!(bench_check_raw_str, char, check_raw_str);
+fn_bench_check_raw!(bench_check_raw_byte_str, u8, check_raw_byte_str);
+fn_bench_check_raw!(bench_check_raw_c_str, char, check_raw_c_str);
 
 // raw str
 
 #[bench]
 fn bench_check_raw_str_ascii(b: &mut test::Bencher) {
-    bench_check_raw(b, 'a', |s, cb| check_raw_str(s, cb));
+    bench_check_raw_str(b, "a", 'a');
 }
 
 #[bench]
 fn bench_check_raw_str_unicode(b: &mut test::Bencher) {
-    bench_check_raw(b, '🦀', |s, cb| check_raw_str(s, cb));
+    bench_check_raw_str(b, "🦀", '🦀');
 }
 
 // raw byte str
 
 #[bench]
-fn bench_check_raw_byte_str(b: &mut test::Bencher) {
-    bench_check_raw(b, b'a', |s, cb| check_raw_byte_str(s, cb));
+fn bench_check_raw_byte_str_ascii(b: &mut test::Bencher) {
+    bench_check_raw_byte_str(b, "a", b'a');
 }
 
 // raw C str
 
 #[bench]
 fn bench_check_raw_c_str_ascii(b: &mut test::Bencher) {
-    bench_check_raw(b, 'a', |s, cb| check_raw_c_str(s, cb));
+    bench_check_raw_c_str(b, "a", 'a');
 }
 
 #[bench]
 fn bench_check_raw_c_str_unicode(b: &mut test::Bencher) {
-    bench_check_raw(b, '🦀', |s, cb| check_raw_c_str(s, cb));
+    bench_check_raw_c_str(b, "🦀", '🦀');
 }
 
 //
 // Unescape
 //
 
-#[allow(clippy::type_complexity)]
-fn bench_unescape<UNIT: Into<char> + PartialEq + Debug + Copy>(
-    b: &mut test::Bencher,
-    s: &str,
-    expected: UNIT,
-    unescape: fn(&str, &mut dyn FnMut(Range<usize>, Result<UNIT, EscapeError>)),
-) {
-    let input: String = test::black_box(repeat_n(s, LEN).collect());
-    assert_eq!(input.len(), LEN * s.len());
-    b.iter(|| {
-        let mut output = vec![];
-        unescape(&input, &mut |range, res| output.push((range, res)));
-        assert_eq!(output.len(), LEN);
-        assert_eq!(output[0], ((0..s.len()), Ok(expected)));
-    });
+macro_rules! fn_bench_unescape {
+    ($name:ident, $unit:ty, $unescape:ident) => {
+        fn $name(b: &mut test::Bencher, s: &str, expected: $unit) {
+            let input: String = test::black_box(repeat_n(s, LEN).collect());
+            assert_eq!(input.len(), LEN * s.len());
+            b.iter(|| {
+                let mut output = vec![];
+
+                $unescape(&input, |range, res| output.push((range, res)));
+                assert_eq!(output.len(), LEN);
+                assert_eq!(output[0], ((0..s.len()), Ok(expected)));
+            });
+        }
+    };
 }
+
+fn_bench_unescape!(bench_unescape_str, char, unescape_str);
+fn_bench_unescape!(bench_unescape_byte_str, u8, unescape_byte_str);
+fn_bench_unescape!(bench_unescape_c_str, MixedUnit, unescape_c_str);
 
 // str
 
 #[bench]
 fn bench_unescape_str_trivial(b: &mut test::Bencher) {
-    bench_unescape(b, r"a", 'a', |s, cb| unescape_str(s, cb));
+    bench_unescape_str(b, r"a", 'a');
 }
 
 #[bench]
 fn bench_unescape_str_ascii(b: &mut test::Bencher) {
-    bench_unescape(b, r"\n", '\n', |s, cb| unescape_str(s, cb));
+    bench_unescape_str(b, r"\n", '\n');
 }
 
 #[bench]
 fn bench_unescape_str_hex(b: &mut test::Bencher) {
-    bench_unescape(b, r"\x22", '"', |s, cb| unescape_str(s, cb));
+    bench_unescape_str(b, r"\x22", '"');
 }
 
 #[bench]
 fn bench_unescape_str_unicode(b: &mut test::Bencher) {
-    bench_unescape(b, r"\u{1f980}", '🦀', |s, cb| unescape_str(s, cb));
+    bench_unescape_str(b, r"\u{1f980}", '🦀');
 }
 
 // byte str
 
 #[bench]
 fn bench_unescape_byte_str_trivial(b: &mut test::Bencher) {
-    bench_unescape(b, r"a", b'a', |s, cb| unescape_byte_str(s, cb));
+    bench_unescape_byte_str(b, r"a", b'a');
 }
 
 #[bench]
 fn bench_unescape_byte_str_ascii(b: &mut test::Bencher) {
-    bench_unescape(b, r"\n", b'\n', |s, cb| unescape_byte_str(s, cb));
+    bench_unescape_byte_str(b, r"\n", b'\n');
 }
 
 #[bench]
 fn bench_unescape_byte_str_hex(b: &mut test::Bencher) {
-    bench_unescape(b, r"\xff", b'\xff', |s, cb| unescape_byte_str(s, cb));
+    bench_unescape_byte_str(b, r"\xff", b'\xff');
 }
 
 // C str
-
-fn bench_unescape_c_str(b: &mut test::Bencher, s: &str, expected: MixedUnit) {
-    let input: String = test::black_box(repeat_n(s, LEN).collect());
-    assert_eq!(input.len(), LEN * s.len());
-    b.iter(|| {
-        let mut output = vec![];
-        unescape_c_str(&input, &mut |range, res| output.push((range, res)));
-        assert_eq!(output.len(), LEN);
-        assert_eq!(output[0], ((0..s.len()), Ok(expected)));
-    });
-}
 
 #[bench]
 fn bench_unescape_c_str_trivial(b: &mut test::Bencher) {
