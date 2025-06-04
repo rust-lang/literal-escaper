@@ -1,3 +1,7 @@
+# 0.0.3
+
+- Extend `rustc-dep-of-std` feature to include `libcore`
+
 # 0.0.2
 
 - Add new `rustc-dep-of-std` feature to allow building `libproc-macro`
