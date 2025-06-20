@@ -344,8 +344,8 @@ trait Unescape {
                         let _ = chars.next();
                         // skip whitespace for backslash newline, see [Rust language reference]
                         // (https://doc.rust-lang.org/reference/tokens.html#string-literals).
-                        let mut callback_err = |range, err| callback(range, Err(err));
-                        skip_ascii_whitespace(&mut chars, start, &mut callback_err);
+                        let callback_err = |range, err| callback(range, Err(err));
+                        skip_ascii_whitespace(&mut chars, start, callback_err);
                         continue;
                     } else {
                         Self::unescape_1(&mut chars)
@@ -444,7 +444,7 @@ fn unicode_escape(chars: &mut impl Iterator<Item = char>) -> Result<u32, EscapeE
 /// Skip ASCII whitespace, except for the formfeed character
 /// (see [this issue](https://github.com/rust-lang/rust/issues/136600)).
 /// Warns on unescaped newline and following non-ASCII whitespace.
-fn skip_ascii_whitespace<F>(chars: &mut Chars<'_>, start: usize, callback: &mut F)
+fn skip_ascii_whitespace<F>(chars: &mut Chars<'_>, start: usize, mut callback: F)
 where
     F: FnMut(Range<usize>, EscapeError),
 {
