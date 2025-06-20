@@ -2,6 +2,7 @@
 //! turning escape sequences into the values they represent.
 
 use std::ffi::CStr;
+use std::num::NonZero;
 use std::ops::Range;
 use std::str::Chars;
 
@@ -105,7 +106,10 @@ pub fn check_raw_byte_str(src: &str, callback: impl FnMut(Range<usize>, Result<u
 /// and produces a sequence of characters or errors,
 /// which are returned by invoking `callback`.
 /// NOTE: Does no escaping, but produces errors for bare carriage return ('\r').
-pub fn check_raw_c_str(src: &str, callback: impl FnMut(Range<usize>, Result<char, EscapeError>)) {
+pub fn check_raw_c_str(
+    src: &str,
+    callback: impl FnMut(Range<usize>, Result<NonZero<char>, EscapeError>),
+) {
     CStr::check_raw(src, callback);
 }
 
@@ -181,15 +185,11 @@ fn char2byte(c: char) -> Result<u8, EscapeError> {
 }
 
 impl CheckRaw for CStr {
-    type RawUnit = char;
+    type RawUnit = NonZero<char>;
 
     #[inline]
     fn char2raw_unit(c: char) -> Result<Self::RawUnit, EscapeError> {
-        if c == '\0' {
-            Err(EscapeError::NulInCStr)
-        } else {
-            Ok(c)
-        }
+        NonZero::new(c).ok_or(EscapeError::NulInCStr)
     }
 }
 
@@ -253,41 +253,66 @@ pub enum MixedUnit {
     /// For example, if '¥' appears in a string it is represented here as
     /// `MixedUnit::Char('¥')`, and it will be appended to the relevant byte
     /// string as the two-byte UTF-8 sequence `[0xc2, 0xa5]`
-    Char(char),
+    Char(NonZero<char>),
 
     /// Used for high bytes (`\x80`..`\xff`).
     ///
     /// For example, if `\xa5` appears in a string it is represented here as
     /// `MixedUnit::HighByte(0xa5)`, and it will be appended to the relevant
     /// byte string as the single byte `0xa5`.
-    HighByte(u8),
+    HighByte(NonZero<u8>),
 }
 
-impl From<char> for MixedUnit {
+impl From<NonZero<char>> for MixedUnit {
     #[inline]
-    fn from(c: char) -> Self {
+    fn from(c: NonZero<char>) -> Self {
         MixedUnit::Char(c)
     }
 }
 
-impl From<u8> for MixedUnit {
+impl From<NonZero<u8>> for MixedUnit {
     #[inline]
-    fn from(n: u8) -> Self {
-        if n.is_ascii() {
-            MixedUnit::Char(n as char)
+    fn from(byte: NonZero<u8>) -> Self {
+        if byte.get().is_ascii() {
+            MixedUnit::Char(NonZero::new(byte.get() as char).unwrap())
         } else {
-            MixedUnit::HighByte(n)
+            MixedUnit::HighByte(byte)
         }
+    }
+}
+
+impl TryFrom<char> for MixedUnit {
+    type Error = EscapeError;
+
+    #[inline]
+    fn try_from(c: char) -> Result<Self, EscapeError> {
+        NonZero::new(c)
+            .map(MixedUnit::Char)
+            .ok_or(EscapeError::NulInCStr)
+    }
+}
+
+impl TryFrom<u8> for MixedUnit {
+    type Error = EscapeError;
+
+    #[inline]
+    fn try_from(byte: u8) -> Result<Self, EscapeError> {
+        NonZero::new(byte)
+            .map(From::from)
+            .ok_or(EscapeError::NulInCStr)
     }
 }
 
 /// Trait for unescaping escape sequences in strings
 trait Unescape {
     /// Unit type of the implementing string type (`char` for string, `u8` for byte string)
-    type Unit: From<u8>;
+    type Unit;
 
     /// Result of unescaping the zero char ('\0')
     const ZERO_RESULT: Result<Self::Unit, EscapeError>;
+
+    /// Converts non-zero bytes to the unit type
+    fn nonzero_byte2unit(b: NonZero<u8>) -> Self::Unit;
 
     /// Converts chars to the unit type
     fn char2unit(c: char) -> Result<Self::Unit, EscapeError>;
@@ -319,18 +344,20 @@ trait Unescape {
         if c == '0' {
             Self::ZERO_RESULT
         } else {
-            simple_escape(c).map(|b| b.into()).or_else(|c| match c {
-                'x' => Self::hex2unit(hex_escape(chars)?),
-                'u' => Self::unicode2unit({
-                    let value = unicode_escape(chars)?;
-                    if value > char::MAX as u32 {
-                        Err(EscapeError::OutOfRangeUnicodeEscape)
-                    } else {
-                        char::from_u32(value).ok_or(EscapeError::LoneSurrogateUnicodeEscape)
-                    }
-                }),
-                _ => Err(EscapeError::InvalidEscape),
-            })
+            simple_escape(c)
+                .map(|b| Self::nonzero_byte2unit(b))
+                .or_else(|c| match c {
+                    'x' => Self::hex2unit(hex_escape(chars)?),
+                    'u' => Self::unicode2unit({
+                        let value = unicode_escape(chars)?;
+                        if value > char::MAX as u32 {
+                            Err(EscapeError::OutOfRangeUnicodeEscape)
+                        } else {
+                            char::from_u32(value).ok_or(EscapeError::LoneSurrogateUnicodeEscape)
+                        }
+                    }),
+                    _ => Err(EscapeError::InvalidEscape),
+                })
         }
     }
 
@@ -373,9 +400,9 @@ trait Unescape {
 ///
 /// Parses the character of an ASCII escape (except nul) without the leading backslash.
 #[inline] // single use in Unescape::unescape_1
-fn simple_escape(c: char) -> Result<u8, char> {
+fn simple_escape(c: char) -> Result<NonZero<u8>, char> {
     // Previous character was '\\', unescape what follows.
-    Ok(match c {
+    Ok(NonZero::new(match c {
         '"' => b'"',
         'n' => b'\n',
         'r' => b'\r',
@@ -384,6 +411,7 @@ fn simple_escape(c: char) -> Result<u8, char> {
         '\'' => b'\'',
         _ => Err(c)?,
     })
+    .unwrap())
 }
 
 /// Interpret a hexadecimal escape
@@ -490,6 +518,11 @@ impl Unescape for str {
     const ZERO_RESULT: Result<Self::Unit, EscapeError> = Ok('\0');
 
     #[inline]
+    fn nonzero_byte2unit(b: NonZero<u8>) -> Self::Unit {
+        b.get().into()
+    }
+
+    #[inline]
     fn char2unit(c: char) -> Result<Self::Unit, EscapeError> {
         Ok(c)
     }
@@ -515,6 +548,11 @@ impl Unescape for [u8] {
     const ZERO_RESULT: Result<Self::Unit, EscapeError> = Ok(b'\0');
 
     #[inline]
+    fn nonzero_byte2unit(b: NonZero<u8>) -> Self::Unit {
+        b.get()
+    }
+
+    #[inline]
     fn char2unit(c: char) -> Result<Self::Unit, EscapeError> {
         char2byte(c)
     }
@@ -536,23 +574,18 @@ impl Unescape for CStr {
     const ZERO_RESULT: Result<Self::Unit, EscapeError> = Err(EscapeError::NulInCStr);
 
     #[inline]
+    fn nonzero_byte2unit(b: NonZero<u8>) -> Self::Unit {
+        b.into()
+    }
+
+    #[inline]
     fn char2unit(c: char) -> Result<Self::Unit, EscapeError> {
-        if c == '\0' {
-            Err(EscapeError::NulInCStr)
-        } else {
-            Ok(MixedUnit::Char(c))
-        }
+        c.try_into()
     }
 
     #[inline]
     fn hex2unit(byte: u8) -> Result<Self::Unit, EscapeError> {
-        if byte == b'\0' {
-            Err(EscapeError::NulInCStr)
-        } else if byte.is_ascii() {
-            Ok(MixedUnit::Char(byte as char))
-        } else {
-            Ok(MixedUnit::HighByte(byte))
-        }
+        byte.try_into()
     }
 
     #[inline]
