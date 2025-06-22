@@ -154,6 +154,7 @@ trait CheckRaw {
 impl CheckRaw for str {
     type RawUnit = char;
 
+    #[inline]
     fn char2raw_unit(c: char) -> Result<Self::RawUnit, EscapeError> {
         Ok(c)
     }
@@ -162,12 +163,14 @@ impl CheckRaw for str {
 impl CheckRaw for [u8] {
     type RawUnit = u8;
 
+    #[inline]
     fn char2raw_unit(c: char) -> Result<Self::RawUnit, EscapeError> {
         char2byte(c)
     }
 }
 
 /// Turn an ascii char into a byte
+#[inline]
 fn char2byte(c: char) -> Result<u8, EscapeError> {
     // do NOT do: c.try_into().ok_or(EscapeError::NonAsciiCharInByte)
     if c.is_ascii() {
@@ -180,6 +183,7 @@ fn char2byte(c: char) -> Result<u8, EscapeError> {
 impl CheckRaw for CStr {
     type RawUnit = char;
 
+    #[inline]
     fn char2raw_unit(c: char) -> Result<Self::RawUnit, EscapeError> {
         if c == '\0' {
             Err(EscapeError::NulInCStr)
@@ -193,6 +197,7 @@ impl CheckRaw for CStr {
 ///
 /// Takes the contents of a char literal (without quotes),
 /// and returns an unescaped char or an error.
+#[inline]
 pub fn unescape_char(src: &str) -> Result<char, EscapeError> {
     str::unescape_single(&mut src.chars())
 }
@@ -201,6 +206,7 @@ pub fn unescape_char(src: &str) -> Result<char, EscapeError> {
 ///
 /// Takes the contents of a byte literal (without quotes),
 /// and returns an unescaped byte or an error.
+#[inline]
 pub fn unescape_byte(src: &str) -> Result<u8, EscapeError> {
     <[u8]>::unescape_single(&mut src.chars())
 }
@@ -258,12 +264,14 @@ pub enum MixedUnit {
 }
 
 impl From<char> for MixedUnit {
+    #[inline]
     fn from(c: char) -> Self {
         MixedUnit::Char(c)
     }
 }
 
 impl From<u8> for MixedUnit {
+    #[inline]
     fn from(n: u8) -> Self {
         if n.is_ascii() {
             MixedUnit::Char(n as char)
@@ -364,6 +372,7 @@ trait Unescape {
 /// Interpret a non-nul ASCII escape
 ///
 /// Parses the character of an ASCII escape (except nul) without the leading backslash.
+#[inline] // single use in Unescape::unescape_1
 fn simple_escape(c: char) -> Result<u8, char> {
     // Previous character was '\\', unescape what follows.
     Ok(match c {
@@ -380,6 +389,7 @@ fn simple_escape(c: char) -> Result<u8, char> {
 /// Interpret a hexadecimal escape
 ///
 /// Parses the two hexadecimal characters of a hexadecimal escape without the leading r"\x".
+#[inline] // single use in Unescape::unescape_1
 fn hex_escape(chars: &mut impl Iterator<Item = char>) -> Result<u8, EscapeError> {
     let hi = chars.next().ok_or(EscapeError::TooShortHexEscape)?;
     let hi = hi.to_digit(16).ok_or(EscapeError::InvalidCharInHexEscape)?;
@@ -394,6 +404,7 @@ fn hex_escape(chars: &mut impl Iterator<Item = char>) -> Result<u8, EscapeError>
 ///
 /// Parse the braces with hexadecimal characters (and underscores) part of a unicode escape.
 /// This r"{...}" normally comes after r"\u" and cannot start with an underscore.
+#[inline] // single use in Unescape::unescape_1
 fn unicode_escape(chars: &mut impl Iterator<Item = char>) -> Result<u32, EscapeError> {
     if chars.next() != Some('{') {
         return Err(EscapeError::NoBraceInUnicodeEscape);
@@ -444,10 +455,12 @@ fn unicode_escape(chars: &mut impl Iterator<Item = char>) -> Result<u32, EscapeE
 /// Skip ASCII whitespace, except for the formfeed character
 /// (see [this issue](https://github.com/rust-lang/rust/issues/136600)).
 /// Warns on unescaped newline and following non-ASCII whitespace.
-fn skip_ascii_whitespace<F>(chars: &mut Chars<'_>, start: usize, mut callback: F)
-where
-    F: FnMut(Range<usize>, EscapeError),
-{
+#[inline] // single use in Unescape::unescape
+fn skip_ascii_whitespace(
+    chars: &mut Chars<'_>,
+    start: usize,
+    mut callback: impl FnMut(Range<usize>, EscapeError),
+) {
     let rest = chars.as_str();
     let first_non_space = rest
         .bytes()
@@ -476,10 +489,12 @@ impl Unescape for str {
 
     const ZERO_RESULT: Result<Self::Unit, EscapeError> = Ok('\0');
 
+    #[inline]
     fn char2unit(c: char) -> Result<Self::Unit, EscapeError> {
         Ok(c)
     }
 
+    #[inline]
     fn hex2unit(b: u8) -> Result<Self::Unit, EscapeError> {
         if b.is_ascii() {
             Ok(b as char)
@@ -488,7 +503,7 @@ impl Unescape for str {
         }
     }
 
-    /// Converts the result of a unicode escape to the unit type
+    #[inline]
     fn unicode2unit(r: Result<char, EscapeError>) -> Result<Self::Unit, EscapeError> {
         r
     }
@@ -499,15 +514,17 @@ impl Unescape for [u8] {
 
     const ZERO_RESULT: Result<Self::Unit, EscapeError> = Ok(b'\0');
 
+    #[inline]
     fn char2unit(c: char) -> Result<Self::Unit, EscapeError> {
         char2byte(c)
     }
 
+    #[inline]
     fn hex2unit(b: u8) -> Result<Self::Unit, EscapeError> {
         Ok(b)
     }
 
-    /// Converts the result of a unicode escape to the unit type
+    #[inline]
     fn unicode2unit(_r: Result<char, EscapeError>) -> Result<Self::Unit, EscapeError> {
         Err(EscapeError::UnicodeEscapeInByte)
     }
@@ -518,6 +535,7 @@ impl Unescape for CStr {
 
     const ZERO_RESULT: Result<Self::Unit, EscapeError> = Err(EscapeError::NulInCStr);
 
+    #[inline]
     fn char2unit(c: char) -> Result<Self::Unit, EscapeError> {
         if c == '\0' {
             Err(EscapeError::NulInCStr)
@@ -526,6 +544,7 @@ impl Unescape for CStr {
         }
     }
 
+    #[inline]
     fn hex2unit(byte: u8) -> Result<Self::Unit, EscapeError> {
         if byte == b'\0' {
             Err(EscapeError::NulInCStr)
@@ -536,7 +555,7 @@ impl Unescape for CStr {
         }
     }
 
-    /// Converts the result of a unicode escape to the unit type
+    #[inline]
     fn unicode2unit(r: Result<char, EscapeError>) -> Result<Self::Unit, EscapeError> {
         Self::char2unit(r?)
     }
