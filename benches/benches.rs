@@ -1,16 +1,17 @@
-#![feature(test)]
+#![feature(macro_metavar_expr_concat)]
 
-extern crate test;
-
-use rustc_literal_escaper::*;
+use std::hint::black_box;
 use std::ops::Range;
 use std::{array, iter};
 
+use criterion::{criterion_group, criterion_main, Criterion};
+
+use rustc_literal_escaper::*;
+
 const LEN: usize = 10_000;
 
-#[bench]
-fn bench_skip_ascii_whitespace(b: &mut test::Bencher) {
-    let input: String = test::black_box({
+fn bench_skip_ascii_whitespace(c: &mut Criterion) {
+    let input: String = black_box({
         let mut res = "\\\n".to_string();
         (0..LEN - 1).for_each(|_| res.push(' '));
         res.push('\n');
@@ -18,30 +19,34 @@ fn bench_skip_ascii_whitespace(b: &mut test::Bencher) {
     });
     assert_eq!(input[2..].len(), LEN);
     assert!(input.contains('\n'));
-    b.iter(|| {
-        let mut output = vec![];
-        // This is internal, so call indirectly
-        // skip_ascii_whitespace(&mut input.chars(), 0, &mut |range, res| {
-        //     output.push((range, res))
-        // });
-        unescape_str(&input, |range, res| output.push((range, res)));
-        assert_eq!(
-            output,
-            [((0..LEN + 2), Err(EscapeError::MultipleSkippedLinesWarning))]
-        );
+    c.bench_function("skip_ascii_whitespace", |b| {
+        b.iter(|| {
+            let mut output = vec![];
+            // This is internal, so call indirectly
+            // skip_ascii_whitespace(&mut input.chars(), 0, &mut |range, res| {
+            //     output.push((range, res))
+            // });
+            unescape_str(&input, |range, res| output.push((range, res)));
+            assert_eq!(
+                output,
+                [((0..LEN + 2), Err(EscapeError::MultipleSkippedLinesWarning))]
+            );
+        })
     });
 }
+
+criterion_group!(skip_ascii_whitespace, bench_skip_ascii_whitespace,);
 
 //
 // Check raw
 //
 
 macro_rules! fn_bench_check_raw {
-    ($name:ident, $unit:ty, $check_raw:ident) => {
-        fn $name(b: &mut test::Bencher, s: &str, expected: &[$unit]) {
-            let input: String = test::black_box([s; LEN].join(""));
+    ($check_raw:ident, $unit:ty) => {
+        fn ${concat("bench_", $check_raw)}(id: &str, c: &mut Criterion, s: &str, expected: &[$unit]) {
+            let input: String = black_box([s; LEN].join(""));
             assert_eq!(input.len(), LEN * s.len());
-            b.iter(|| {
+            c.bench_function(&format!("{}: {id}", stringify!($check_raw)), |b| b.iter(|| {
                 let mut output = Vec::with_capacity(expected.len());
 
                 $check_raw(&input, |range, res| output.push((range, res)));
@@ -51,31 +56,29 @@ macro_rules! fn_bench_check_raw {
                 for ((i, &e), (p, c)) in expected.iter().enumerate().zip(s.char_indices()) {
                     assert_eq!(output[i], ((p..p + c.len_utf8()), Ok(e)));
                 }
-            });
+            }));
         }
     };
 }
 
-fn_bench_check_raw!(bench_check_raw_str, char, check_raw_str);
-fn_bench_check_raw!(bench_check_raw_byte_str, u8, check_raw_byte_str);
-fn_bench_check_raw!(bench_check_raw_c_str, char, check_raw_c_str);
+fn_bench_check_raw!(check_raw_str, char);
+fn_bench_check_raw!(check_raw_byte_str, u8);
+fn_bench_check_raw!(check_raw_c_str, char);
 
 // raw str
 
-#[bench]
-fn bench_check_raw_str_ascii(b: &mut test::Bencher) {
-    bench_check_raw_str(b, "a", &['a'; LEN]);
+fn bench_check_raw_str_ascii(c: &mut Criterion) {
+    bench_check_raw_str("ascii", c, "a", &['a'; LEN]);
 }
 
-#[bench]
-fn bench_check_raw_str_non_ascii(b: &mut test::Bencher) {
-    bench_check_raw_str(b, "🦀", &['🦀'; LEN]);
+fn bench_check_raw_str_non_ascii(c: &mut Criterion) {
+    bench_check_raw_str("non-ascii", c, "🦀", &['🦀'; LEN]);
 }
 
-#[bench]
-fn bench_check_raw_str_unicode(b: &mut test::Bencher) {
+fn bench_check_raw_str_unicode(c: &mut Criterion) {
     bench_check_raw_str(
-        b,
+        "unicode",
+        c,
         "a🦀🚀z",
         &array::from_fn::<_, { 4 * LEN }, _>(|i| match i % 4 {
             0 => 'a',
@@ -86,30 +89,36 @@ fn bench_check_raw_str_unicode(b: &mut test::Bencher) {
         }),
     );
 }
+
+criterion_group!(
+    raw_str,
+    bench_check_raw_str_ascii,
+    bench_check_raw_str_non_ascii,
+    bench_check_raw_str_unicode
+);
 
 // raw byte str
 
-#[bench]
-fn bench_check_raw_byte_str_ascii(b: &mut test::Bencher) {
-    bench_check_raw_byte_str(b, "a", &[b'a'; LEN]);
+fn bench_check_raw_byte_str_ascii(c: &mut Criterion) {
+    bench_check_raw_byte_str("ascii", c, "a", &[b'a'; LEN]);
 }
+
+criterion_group!(raw_byte_str, bench_check_raw_byte_str_ascii);
 
 // raw C str
 
-#[bench]
-fn bench_check_raw_c_str_ascii(b: &mut test::Bencher) {
-    bench_check_raw_c_str(b, "a", &['a'; LEN]);
+fn bench_check_raw_c_str_ascii(c: &mut Criterion) {
+    bench_check_raw_c_str("ascii", c, "a", &['a'; LEN]);
 }
 
-#[bench]
-fn bench_check_raw_c_str_non_ascii(b: &mut test::Bencher) {
-    bench_check_raw_c_str(b, "🦀", &['🦀'; LEN]);
+fn bench_check_raw_c_str_non_ascii(c: &mut Criterion) {
+    bench_check_raw_c_str("non-ascii", c, "🦀", &['🦀'; LEN]);
 }
 
-#[bench]
-fn bench_check_raw_c_str_unicode(b: &mut test::Bencher) {
+fn bench_check_raw_c_str_unicode(c: &mut Criterion) {
     bench_check_raw_c_str(
-        b,
+        "unicode",
+        c,
         "a🦀🚀z",
         &array::from_fn::<_, { 4 * LEN }, _>(|i| match i % 4 {
             0 => 'a',
@@ -120,20 +129,28 @@ fn bench_check_raw_c_str_unicode(b: &mut test::Bencher) {
         }),
     );
 }
+
+criterion_group!(
+    raw_c_str,
+    bench_check_raw_c_str_ascii,
+    bench_check_raw_c_str_non_ascii,
+    bench_check_raw_c_str_unicode
+);
 
 //
 // Unescape
 //
 
 macro_rules! fn_bench_unescape {
-    ($name:ident, $unit:ty, $unescape:ident) => {
-        fn $name(
-            b: &mut test::Bencher,
+    ($unescape:ident, $unit:ty) => {
+        fn ${concat("bench_", $unescape)}(
+			id: &str,
+            c: &mut Criterion,
             s: &str,
             expected: &[(Range<usize>, Result<$unit, EscapeError>)],
         ) {
-            let input: String = test::black_box([s; LEN].join(""));
-            b.iter(|| {
+            let input: String = black_box([s; LEN].join(""));
+            c.bench_function(&format!("{}: {id}", stringify!($unescape)), |b| b.iter(|| {
                 let mut output = Vec::with_capacity(expected.len());
 
                 $unescape(&input, |range, res| output.push((range, res)));
@@ -143,41 +160,41 @@ macro_rules! fn_bench_unescape {
                 for (i, e) in expected.iter().enumerate() {
                     assert_eq!(output[i], *e);
                 }
-            });
+            }));
         }
     };
 }
 
-fn_bench_unescape!(bench_unescape_str, char, unescape_str);
-fn_bench_unescape!(bench_unescape_byte_str, u8, unescape_byte_str);
-fn_bench_unescape!(bench_unescape_c_str, MixedUnit, unescape_c_str);
+fn_bench_unescape!(unescape_str, char);
+fn_bench_unescape!(unescape_byte_str, u8);
+fn_bench_unescape!(unescape_c_str, MixedUnit);
 
 // str
 
-#[bench]
-fn bench_unescape_str_ascii(b: &mut test::Bencher) {
+fn bench_unescape_str_ascii(c: &mut Criterion) {
     bench_unescape_str(
-        b,
+        "ascii",
+        c,
         r"a",
         &array::from_fn::<_, LEN, _>(|i| (i..i + 1, Ok('a'))),
     );
 }
 
-#[bench]
-fn bench_unescape_str_non_ascii(b: &mut test::Bencher) {
+fn bench_unescape_str_non_ascii(c: &mut Criterion) {
     bench_unescape_str(
-        b,
+        "non-ascii",
+        c,
         r"🦀",
         &array::from_fn::<_, LEN, _>(|i| (4 * i..4 * (i + 1), Ok('🦀'))),
     );
 }
 
-#[bench]
-fn bench_unescape_str_unicode(b: &mut test::Bencher) {
+fn bench_unescape_str_unicode(c: &mut Criterion) {
     let input = "a🦀🚀z";
     let l = input.len();
     bench_unescape_str(
-        b,
+        "unicode",
+        c,
         input,
         &array::from_fn::<_, { 4 * LEN }, _>(|i| match i % 4 {
             0 => (i / 4 * l..i / 4 * l + 1, Ok('a')),
@@ -189,30 +206,37 @@ fn bench_unescape_str_unicode(b: &mut test::Bencher) {
     );
 }
 
-#[bench]
-fn bench_unescape_str_ascii_escape(b: &mut test::Bencher) {
+criterion_group!(
+    str_no_escape,
+    bench_unescape_str_ascii,
+    bench_unescape_str_non_ascii,
+    bench_unescape_str_unicode
+);
+
+fn bench_unescape_str_ascii_escape(c: &mut Criterion) {
     bench_unescape_str(
-        b,
+        "ascii",
+        c,
         r"\n",
         &array::from_fn::<_, LEN, _>(|i| (2 * i..2 * (i + 1), Ok('\n'))),
     );
 }
 
-#[bench]
-fn bench_unescape_str_hex_escape(b: &mut test::Bencher) {
+fn bench_unescape_str_hex_escape(c: &mut Criterion) {
     bench_unescape_str(
-        b,
+        "hex escape",
+        c,
         r"\x22",
         &array::from_fn::<_, LEN, _>(|i| (4 * i..4 * (i + 1), Ok('"'))),
     );
 }
 
-#[bench]
-fn bench_unescape_str_unicode_escape(b: &mut test::Bencher) {
+fn bench_unescape_str_unicode_escape(c: &mut Criterion) {
     let input = r"\u{1f980}\u{1f680}";
     let l = input.len();
     bench_unescape_str(
-        b,
+        "unicode escape",
+        c,
         input,
         &array::from_fn::<_, LEN, _>(|i| {
             if i % 2 == 0 {
@@ -224,14 +248,14 @@ fn bench_unescape_str_unicode_escape(b: &mut test::Bencher) {
     );
 }
 
-#[bench]
-fn bench_unescape_str_mixed_escape(b: &mut test::Bencher) {
+fn bench_unescape_str_mixed_escape(c: &mut Criterion) {
     let inputs = [r"\n", r"\x22", r"\u{1f980}", r"\u{1f680}"];
     let n = inputs.len();
     let input = inputs.join("");
     let l = input.len();
     bench_unescape_str(
-        b,
+        "mixed escape",
+        c,
         &input,
         &iter::from_fn({
             let mut i = 0;
@@ -253,43 +277,53 @@ fn bench_unescape_str_mixed_escape(b: &mut test::Bencher) {
     );
 }
 
+criterion_group!(
+    str_escape,
+    bench_unescape_str_ascii_escape,
+    bench_unescape_str_hex_escape,
+    bench_unescape_str_unicode_escape,
+    bench_unescape_str_mixed_escape
+);
+
 // byte str
 
-#[bench]
-fn bench_unescape_byte_str_ascii(b: &mut test::Bencher) {
+fn bench_unescape_byte_str_ascii(c: &mut Criterion) {
     bench_unescape_byte_str(
-        b,
+        "ascii",
+        c,
         r"a",
         &array::from_fn::<_, { LEN }, _>(|i| (i..i + 1, Ok(b'a'))),
     );
 }
 
-#[bench]
-fn bench_unescape_byte_str_ascii_escape(b: &mut test::Bencher) {
+criterion_group!(byte_str_no_escape, bench_unescape_byte_str_ascii);
+
+fn bench_unescape_byte_str_ascii_escape(c: &mut Criterion) {
     bench_unescape_byte_str(
-        b,
+        "ascii escape",
+        c,
         r"\n",
         &array::from_fn::<_, { LEN }, _>(|i| (2 * i..2 * (i + 1), Ok(b'\n'))),
     );
 }
 
-#[bench]
-fn bench_unescape_byte_str_hex_escape(b: &mut test::Bencher) {
+fn bench_unescape_byte_str_hex_escape(c: &mut Criterion) {
     bench_unescape_byte_str(
-        b,
+        "hex escape",
+        c,
         r"\xff",
         &array::from_fn::<_, { LEN }, _>(|i| (4 * i..4 * (i + 1), Ok(b'\xff'))),
     );
 }
 
-#[bench]
-fn bench_unescape_byte_str_mixed_escape(b: &mut test::Bencher) {
+fn bench_unescape_byte_str_mixed_escape(c: &mut Criterion) {
     let inputs = [r"a", r"\n", r"\xff", r"z"];
     let input = inputs.join("");
     let n = inputs.len();
     let l = input.len();
     bench_unescape_byte_str(
-        b,
+        "mixed escape",
+        c,
         &input,
         &iter::from_fn({
             let mut i = 0;
@@ -311,32 +345,39 @@ fn bench_unescape_byte_str_mixed_escape(b: &mut test::Bencher) {
     );
 }
 
+criterion_group!(
+    byte_str_escape,
+    bench_unescape_byte_str_ascii_escape,
+    bench_unescape_byte_str_hex_escape,
+    bench_unescape_byte_str_mixed_escape
+);
+
 // C str
 
-#[bench]
-fn bench_unescape_c_str_ascii(b: &mut test::Bencher) {
+fn bench_unescape_c_str_ascii(c: &mut Criterion) {
     bench_unescape_c_str(
-        b,
+        "ascii",
+        c,
         r"a",
         &array::from_fn::<_, { LEN }, _>(|i| (i..i + 1, Ok(MixedUnit::Char('a')))),
     );
 }
 
-#[bench]
-fn bench_unescape_c_str_non_ascii(b: &mut test::Bencher) {
+fn bench_unescape_c_str_non_ascii(c: &mut Criterion) {
     bench_unescape_c_str(
-        b,
+        "non-ascii",
+        c,
         r"🦀",
         &array::from_fn::<_, LEN, _>(|i| (4 * i..4 * (i + 1), Ok(MixedUnit::Char('🦀')))),
     );
 }
 
-#[bench]
-fn bench_unescape_c_str_unicode(b: &mut test::Bencher) {
+fn bench_unescape_c_str_unicode(c: &mut Criterion) {
     let input = "a🦀🚀z";
     let l = input.len();
     bench_unescape_c_str(
-        b,
+        "unicode",
+        c,
         input,
         &array::from_fn::<_, { 4 * LEN }, _>(|i| match i % 4 {
             0 => (i / 4 * l..i / 4 * l + 1, Ok(MixedUnit::Char('a'))),
@@ -348,28 +389,35 @@ fn bench_unescape_c_str_unicode(b: &mut test::Bencher) {
     );
 }
 
-#[bench]
-fn bench_unescape_c_str_ascii_escape(b: &mut test::Bencher) {
+criterion_group!(
+    c_str_no_escape,
+    bench_unescape_c_str_ascii,
+    bench_unescape_c_str_non_ascii,
+    bench_unescape_c_str_unicode
+);
+
+fn bench_unescape_c_str_ascii_escape(c: &mut Criterion) {
     bench_unescape_c_str(
-        b,
+        "ascii escape",
+        c,
         r"\n",
         &array::from_fn::<_, { LEN }, _>(|i| (2 * i..2 * (i + 1), Ok(MixedUnit::Char('\n')))),
     );
 }
 
-#[bench]
-fn bench_unescape_c_str_hex_escape_ascii(b: &mut test::Bencher) {
+fn bench_unescape_c_str_hex_escape_ascii(c: &mut Criterion) {
     bench_unescape_c_str(
-        b,
+        "hex escape (ascii)",
+        c,
         r"\x22",
         &array::from_fn::<_, { LEN }, _>(|i| (4 * i..4 * (i + 1), Ok(MixedUnit::Char('"')))),
     );
 }
 
-#[bench]
-fn bench_unescape_c_str_hex_escape_byte(b: &mut test::Bencher) {
+fn bench_unescape_c_str_hex_escape_byte(c: &mut Criterion) {
     bench_unescape_c_str(
-        b,
+        "hex escape (byte)",
+        c,
         r"\xff",
         &array::from_fn::<_, { LEN }, _>(|i| {
             (4 * i..4 * (i + 1), Ok(MixedUnit::HighByte(b'\xff')))
@@ -377,23 +425,23 @@ fn bench_unescape_c_str_hex_escape_byte(b: &mut test::Bencher) {
     );
 }
 
-#[bench]
-fn bench_unescape_c_str_unicode_escape(b: &mut test::Bencher) {
+fn bench_unescape_c_str_unicode_escape(c: &mut Criterion) {
     bench_unescape_c_str(
-        b,
+        "unicode escape",
+        c,
         r"\u{1f980}",
         &array::from_fn::<_, { LEN }, _>(|i| (9 * i..9 * (i + 1), Ok(MixedUnit::Char('🦀')))),
     );
 }
 
-#[bench]
-fn bench_unescape_c_str_mixed_escape(b: &mut test::Bencher) {
+fn bench_unescape_c_str_mixed_escape(c: &mut Criterion) {
     let inputs = [r"\n", r"\x22", r"\u{1f980}", r"\u{1f680}", r"\xff"];
     let n = inputs.len();
     let input = inputs.join("");
     let l = input.len();
     bench_unescape_c_str(
-        b,
+        "mixed escape",
+        c,
         &input,
         &iter::from_fn({
             let mut i = 0;
@@ -418,3 +466,25 @@ fn bench_unescape_c_str_mixed_escape(b: &mut test::Bencher) {
         .collect::<Vec<_>>(),
     );
 }
+
+criterion_group!(
+    c_str_escape,
+    bench_unescape_c_str_ascii_escape,
+    bench_unescape_c_str_hex_escape_ascii,
+    bench_unescape_c_str_hex_escape_byte,
+    bench_unescape_c_str_unicode_escape,
+    bench_unescape_c_str_mixed_escape
+);
+
+criterion_main!(
+    skip_ascii_whitespace,
+    raw_str,
+    raw_byte_str,
+    raw_c_str,
+    str_no_escape,
+    str_escape,
+    byte_str_no_escape,
+    byte_str_escape,
+    c_str_no_escape,
+    c_str_escape,
+);
