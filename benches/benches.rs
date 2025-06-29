@@ -1,6 +1,7 @@
 #![feature(macro_metavar_expr_concat)]
 
 use std::hint::black_box;
+use std::num::NonZero;
 use std::ops::Range;
 use std::{array, iter};
 
@@ -63,7 +64,7 @@ macro_rules! fn_bench_check_raw {
 
 fn_bench_check_raw!(check_raw_str, char);
 fn_bench_check_raw!(check_raw_byte_str, u8);
-fn_bench_check_raw!(check_raw_c_str, char);
+fn_bench_check_raw!(check_raw_c_str, NonZero<char>);
 
 // raw str
 
@@ -108,11 +109,11 @@ criterion_group!(raw_byte_str, bench_check_raw_byte_str_ascii);
 // raw C str
 
 fn bench_check_raw_c_str_ascii(c: &mut Criterion) {
-    bench_check_raw_c_str("ascii", c, "a", &['a'; LEN]);
+    bench_check_raw_c_str("ascii", c, "a", &[NonZero::new('a').unwrap(); LEN]);
 }
 
 fn bench_check_raw_c_str_non_ascii(c: &mut Criterion) {
-    bench_check_raw_c_str("non-ascii", c, "🦀", &['🦀'; LEN]);
+    bench_check_raw_c_str("non-ascii", c, "🦀", &[NonZero::new('🦀').unwrap(); LEN]);
 }
 
 fn bench_check_raw_c_str_unicode(c: &mut Criterion) {
@@ -120,12 +121,15 @@ fn bench_check_raw_c_str_unicode(c: &mut Criterion) {
         "unicode",
         c,
         "a🦀🚀z",
-        &array::from_fn::<_, { 4 * LEN }, _>(|i| match i % 4 {
-            0 => 'a',
-            1 => '🦀',
-            2 => '🚀',
-            3 => 'z',
-            _ => unreachable!(),
+        &array::from_fn::<_, { 4 * LEN }, _>(|i| {
+            NonZero::new(match i % 4 {
+                0 => 'a',
+                1 => '🦀',
+                2 => '🚀',
+                3 => 'z',
+                _ => unreachable!(),
+            })
+            .unwrap()
         }),
     );
 }
@@ -215,7 +219,7 @@ criterion_group!(
 
 fn bench_unescape_str_ascii_escape(c: &mut Criterion) {
     bench_unescape_str(
-        "ascii",
+        "ascii escape",
         c,
         r"\n",
         &array::from_fn::<_, LEN, _>(|i| (2 * i..2 * (i + 1), Ok('\n'))),
@@ -359,7 +363,7 @@ fn bench_unescape_c_str_ascii(c: &mut Criterion) {
         "ascii",
         c,
         r"a",
-        &array::from_fn::<_, { LEN }, _>(|i| (i..i + 1, Ok(MixedUnit::Char('a')))),
+        &array::from_fn::<_, { LEN }, _>(|i| (i..i + 1, 'a'.try_into())),
     );
 }
 
@@ -368,7 +372,7 @@ fn bench_unescape_c_str_non_ascii(c: &mut Criterion) {
         "non-ascii",
         c,
         r"🦀",
-        &array::from_fn::<_, LEN, _>(|i| (4 * i..4 * (i + 1), Ok(MixedUnit::Char('🦀')))),
+        &array::from_fn::<_, LEN, _>(|i| (4 * i..4 * (i + 1), '🦀'.try_into())),
     );
 }
 
@@ -380,10 +384,10 @@ fn bench_unescape_c_str_unicode(c: &mut Criterion) {
         c,
         input,
         &array::from_fn::<_, { 4 * LEN }, _>(|i| match i % 4 {
-            0 => (i / 4 * l..i / 4 * l + 1, Ok(MixedUnit::Char('a'))),
-            1 => (i / 4 * l + 1..i / 4 * l + 5, Ok(MixedUnit::Char('🦀'))),
-            2 => (i / 4 * l + 5..i / 4 * l + 9, Ok(MixedUnit::Char('🚀'))),
-            3 => (i / 4 * l + 9..i / 4 * l + 10, Ok(MixedUnit::Char('z'))),
+            0 => (i / 4 * l..i / 4 * l + 1, 'a'.try_into()),
+            1 => (i / 4 * l + 1..i / 4 * l + 5, '🦀'.try_into()),
+            2 => (i / 4 * l + 5..i / 4 * l + 9, '🚀'.try_into()),
+            3 => (i / 4 * l + 9..i / 4 * l + 10, 'z'.try_into()),
             _ => unreachable!(),
         }),
     );
@@ -401,7 +405,7 @@ fn bench_unescape_c_str_ascii_escape(c: &mut Criterion) {
         "ascii escape",
         c,
         r"\n",
-        &array::from_fn::<_, { LEN }, _>(|i| (2 * i..2 * (i + 1), Ok(MixedUnit::Char('\n')))),
+        &array::from_fn::<_, { LEN }, _>(|i| (2 * i..2 * (i + 1), '\n'.try_into())),
     );
 }
 
@@ -410,7 +414,7 @@ fn bench_unescape_c_str_hex_escape_ascii(c: &mut Criterion) {
         "hex escape (ascii)",
         c,
         r"\x22",
-        &array::from_fn::<_, { LEN }, _>(|i| (4 * i..4 * (i + 1), Ok(MixedUnit::Char('"')))),
+        &array::from_fn::<_, { LEN }, _>(|i| (4 * i..4 * (i + 1), '"'.try_into())),
     );
 }
 
@@ -419,9 +423,7 @@ fn bench_unescape_c_str_hex_escape_byte(c: &mut Criterion) {
         "hex escape (byte)",
         c,
         r"\xff",
-        &array::from_fn::<_, { LEN }, _>(|i| {
-            (4 * i..4 * (i + 1), Ok(MixedUnit::HighByte(b'\xff')))
-        }),
+        &array::from_fn::<_, { LEN }, _>(|i| (4 * i..4 * (i + 1), b'\xff'.try_into())),
     );
 }
 
@@ -430,7 +432,7 @@ fn bench_unescape_c_str_unicode_escape(c: &mut Criterion) {
         "unicode escape",
         c,
         r"\u{1f980}",
-        &array::from_fn::<_, { LEN }, _>(|i| (9 * i..9 * (i + 1), Ok(MixedUnit::Char('🦀')))),
+        &array::from_fn::<_, { LEN }, _>(|i| (9 * i..9 * (i + 1), '🦀'.try_into())),
     );
 }
 
@@ -447,14 +449,11 @@ fn bench_unescape_c_str_mixed_escape(c: &mut Criterion) {
             let mut i = 0;
             move || {
                 let res = Some(match i % n {
-                    0 => (i / n * l..i / n * l + 2, Ok(MixedUnit::Char('\n'))),
-                    1 => (i / n * l + 2..i / n * l + 6, Ok(MixedUnit::Char('"'))),
-                    2 => (i / n * l + 6..i / n * l + 15, Ok(MixedUnit::Char('🦀'))),
-                    3 => (i / n * l + 15..i / n * l + 24, Ok(MixedUnit::Char('🚀'))),
-                    4 => (
-                        i / n * l + 24..i / n * l + 28,
-                        Ok(MixedUnit::HighByte(b'\xff')),
-                    ),
+                    0 => (i / n * l..i / n * l + 2, '\n'.try_into()),
+                    1 => (i / n * l + 2..i / n * l + 6, '"'.try_into()),
+                    2 => (i / n * l + 6..i / n * l + 15, '🦀'.try_into()),
+                    3 => (i / n * l + 15..i / n * l + 24, '🚀'.try_into()),
+                    4 => (i / n * l + 24..i / n * l + 28, b'\xff'.try_into()),
                     r if r >= n => unreachable!(),
                     _ => unimplemented!(),
                 });
