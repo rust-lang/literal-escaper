@@ -1,3 +1,8 @@
+# 0.0.5
+
+- Use `NonZero<char/u8>` in `unescape_c_str` and `check_raw_c_str` to statically exclude nuls
+- Add `#[inline]` to small functions for improved performance
+
 # 0.0.4
 
 - Add `check_raw_str`, `check_raw_byte_str`, `check_raw_c_str`,
