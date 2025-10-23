@@ -11,13 +11,12 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  beta-checks:
+  stable-checks:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@beta
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: beta
           components: rustfmt
       - run: cargo fmt -- --check
       - run: cargo test
@@ -28,9 +27,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@nightly
         with:
-          toolchain: nightly
           components: clippy
       # Check all entries, including tests and benchmarks.
       - run: cargo clippy --all-targets
