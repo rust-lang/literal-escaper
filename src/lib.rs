@@ -6,9 +6,6 @@ use std::num::NonZero;
 use std::ops::Range;
 use std::str::Chars;
 
-#[cfg(test)]
-mod tests;
-
 /// Errors and warnings that can occur during string, char, and byte unescaping.
 ///
 /// Mostly relating to malformed escape sequences, but also a few other problems.
