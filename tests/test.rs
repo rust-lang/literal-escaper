@@ -1,4 +1,8 @@
-use super::*;
+use rustc_literal_escaper::{
+    check_raw_byte_str, check_raw_str, unescape_byte, unescape_byte_str, unescape_char,
+    unescape_str, EscapeError,
+};
+use std::ops::Range;
 
 #[test]
 fn test_unescape_char_bad() {
