@@ -12,6 +12,7 @@ use core::str::Chars;
 ///
 /// Mostly relating to malformed escape sequences, but also a few other problems.
 #[derive(Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum EscapeError {
     /// Expected 1 char, but 0 were found.
     ZeroChars,
