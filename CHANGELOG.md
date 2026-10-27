@@ -1,3 +1,15 @@
+# 0.0.8
+
+- Improve the performance of `check_raw_str`, `check_raw_byte_str`, `check_raw_c_str`
+
+# 0.0.7
+
+- Actually make the crate no-std, by removing the dependency on `rustc-std-workspace-std`
+
+# 0.0.6
+
+- Make the crate no-std
+
 # 0.0.5
 
 - Use `NonZero<char/u8>` in `unescape_c_str` and `check_raw_c_str` to statically exclude nuls
