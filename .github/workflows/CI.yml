@@ -14,11 +14,13 @@ jobs:
   stable-checks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          targets: x86_64-unknown-none
-          components: rustfmt
+          persist-credentials: false
+      - run: rustup install stable -c ${COMPONENTS} -t ${TARGETS} && rustup default stable
+        env:
+          TARGETS: x86_64-unknown-none
+          COMPONENTS: rustfmt
       - run: cargo fmt -- --check
       - run: cargo check
       - run: cargo check --target=x86_64-unknown-none
@@ -29,9 +31,11 @@ jobs:
   nightly-checks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          components: clippy
+          persist-credentials: false
+      - run: rustup install nightly -c ${COMPONENTS} && rustup default nightly
+        env:
+          COMPONENTS: clippy
       # Check all entries, including tests and benchmarks.
       - run: cargo clippy --all-targets
